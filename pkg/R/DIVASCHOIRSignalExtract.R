@@ -30,7 +30,7 @@
 #' @export
 DIVASCHOIRSignalExtract <- function(
     datablock, nsim = 400,
-    iplot = FALSE, cull = 0.382, seed = NULL, fixed_rank = NULL
+    iplot = FALSE, cull = 0.382, seed = NULL
 ) {
 
   if (!is.null(seed)) {
@@ -83,14 +83,6 @@ DIVASCHOIRSignalExtract <- function(
     dataname <- paste0("CategoricalDatablock", 1:nb)
   }
 
-  if (!is.null(fixed_rank)) {
-    fixed_rank <- as.integer(fixed_rank)
-    if (length(fixed_rank) == 1L) fixed_rank <- rep(fixed_rank, length(datablock))
-    if (length(fixed_rank) != length(datablock) || anyNA(fixed_rank) || any(fixed_rank < 1L)) {
-      stop("`fixed_rank` must be a positive integer or one positive integer per categorical block.")
-    }
-  }
-
   # Initialize the output lists
   VBars <- vector("list", nb) # adjusted signal row spaces
   UBars <- vector("list", nb) # adjusted signal column spaces
@@ -126,7 +118,7 @@ DIVASCHOIRSignalExtract <- function(
     # Fixed initial categorical signal rank by truncated SVD.
     sv <- svd(datablockc)
 
-    rHat <- min(if (is.null(fixed_rank)) 5L else fixed_rank[ib], length(sv$d))
+    rHat <- min(5L, length(sv$d))
     idx <- seq_len(rHat)
 
     U_hat <- sv$u[, idx, drop = FALSE]
