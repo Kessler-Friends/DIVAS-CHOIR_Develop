@@ -142,6 +142,16 @@ BlockJointStrucEstimateJP <- function(
     theta0 = 45, optArgin = list(), iprint = F, figdir = NULL
 ) {
 
+  # CVXR requires quadratic-form matrices to be explicitly symmetric positive
+  # semidefinite. `tcrossprod()` preserves symmetry more reliably than `%*% t()`
+  # for the low-rank projection matrices used here; a tiny diagonal ridge also
+  # absorbs floating-point negative eigenvalues.
+  psd_crossprod <- function(x, ridge = 1e-10) {
+    out <- tcrossprod(x)
+    diag(out) <- diag(out) + ridge
+    out
+  }
+
   nb <- length(blockIn)
   allIdx <- 1:nb
   blockIdx <- allIdx[blockIn]
@@ -167,14 +177,14 @@ BlockJointStrucEstimateJP <- function(
       Qc2[[ib]] <- VBars[[ib]] %*% t(VBars[[ib]]) / cos(phiBars[ib] * pi / 180)^2
     } else {
       # Mo1 <- cbind(Mo1, VBars[[ib]])
-      Qc1[[ib]] <- VBars[[ib]] %*% t(VBars[[ib]]) / cos(phiBars[ib] * pi / 180)^2
+      Qc1[[ib]] <- psd_crossprod(VBars[[ib]]) / cos(phiBars[ib] * pi / 180)^2
       Qc2[[ib]] <- diag(n)
     }
   }
 
 
-  Qo1 <- if (is.null(Mo1)) diag(n) * 1e-6 else Mo1 %*% t(Mo1)
-  Qo2 <- if (is.null(Mo2)) diag(n) * 1e-6 else Mo2 %*% t(Mo2)
+  Qo1 <- if (is.null(Mo1)) diag(n) * 1e-6 else psd_crossprod(Mo1)
+  Qo2 <- if (is.null(Mo2)) diag(n) * 1e-6 else psd_crossprod(Mo2)
 
   Vorth <- NULL
   Vnorth <- NULL
@@ -220,7 +230,7 @@ BlockJointStrucEstimateJP <- function(
   }
 
   if (!is.null(Vnorth) && ncol(Vnorth) > 0) {
-    Qc1[[length(Qc1) + 1]] <- Vnorth %*% t(Vnorth) / cos(theta0)^2
+    Qc1[[length(Qc1) + 1]] <- psd_crossprod(Vnorth) / cos(theta0)^2
     Qc2[[length(Qc2) + 1]] <- diag(n)
   }
 
@@ -284,5 +294,4 @@ BlockJointStrucEstimateJP <- function(
 
   return(list(Vi = Vi, curRanks = curRanks, angles = angles))
 }
-
 
