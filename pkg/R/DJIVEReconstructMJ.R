@@ -7,6 +7,12 @@
 #'
 #' @return A list containing `matBlockMap` (joint block matrix map) and `matLoadingMap` (joint block loading map)
 MatReconstructMJ <- function(X, matJointV, matJointOrder, matJointRanks) {
+  # A data block can legitimately have no retained joint structure.  Return
+  # empty component maps instead of passing a NULL/zero-column basis to QR.
+  if (is.null(matJointV) || ncol(matJointV) == 0L || length(matJointRanks) == 0L) {
+    return(list(matBlockMap = list(), matLoadingMap = list()))
+  }
+
   # Solve linear equation to get the loadings
   #matLoading <- t(solve(t(matJointV), t(X)))
   #matLoading <- t(solve(t(matJointV) %*% matJointV) %*% t(matJointV) %*% t(X))
@@ -67,8 +73,8 @@ DJIVEReconstructMJ <- function(datablock, dataname, outMap, keyIdxMap, jointBloc
   # }
 
   for (ib in seq_len(nb)) {
-    #matJointV[[ib]] <- matrix(NA, nrow = 1, ncol = 1)  # double check when data change
-    matrix(nrow = nrow(datablock[[ib]]), ncol = 0)
+    # Joint bases live in sample space, so they have one row per sample.
+    matJointV[[ib]] <- matrix(0, nrow = ncol(datablock[[ib]]), ncol = 0)
     matJointOrder[[ib]] <- character()
     matJointRanks[[ib]] <- numeric()
   }

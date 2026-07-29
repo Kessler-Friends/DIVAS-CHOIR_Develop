@@ -36,7 +36,8 @@
 #'
 DIVASmain <- function(
     continuous_datablock = NULL, categorical_datablock = NULL, nsim = 400,
-    iprint = TRUE, colCent = FALSE, rowCent = FALSE, figdir = NULL, seed = NULL
+    iprint = TRUE, colCent = FALSE, rowCent = FALSE, figdir = NULL, seed = NULL,
+    categorical_rank = NULL
   ){
   continuous_datablock <- if (is.null(continuous_datablock)) list() else continuous_datablock
   categorical_datablock <- if (is.null(categorical_datablock)) list() else categorical_datablock
@@ -91,7 +92,8 @@ DIVASmain <- function(
       nsim = nsim,
       iplot = FALSE,
       cull = filterPerc,
-      seed = seed
+      seed = seed,
+      fixed_rank = categorical_rank
     )
   } else {
     Phase1_categorical <- list(

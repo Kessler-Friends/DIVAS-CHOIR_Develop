@@ -19,10 +19,16 @@ Idx2numMJ <- function(blockIn) {
 #-----------------------------------------------------------------------------
 projAngleMJ <- function(x, V) {
   # Project x onto the subspace spanned by V
-  px <- V %*% t(V) %*% x
+  px <- tcrossprod(V) %*% x
 
   # Calculate the angle between the vector x and its projection px
-  angle <- acos(sum(px * x) / (norm(px, type = "2") * norm(x, type = "2"))) * 180 / pi
+  denominator <- norm(px, type = "2") * norm(x, type = "2")
+  if (!is.finite(denominator) || denominator == 0) {
+    return(90)
+  }
+  cosine <- sum(px * x) / denominator
+  cosine <- pmin(1, pmax(-1, cosine))
+  angle <- acos(cosine) * 180 / pi
 
   return(angle)
 }
@@ -164,17 +170,17 @@ BlockJointStrucEstimateJP <- function(
       Mo2 <- cbind(Mo2, VBars[[ib]])
       Qc1[[ib]] <- diag(n)
       # In MATLAB, 'cosd()' takes degrees, so convert phiBars to radians in R
-      Qc2[[ib]] <- VBars[[ib]] %*% t(VBars[[ib]]) / cos(phiBars[ib] * pi / 180)^2
+      Qc2[[ib]] <- tcrossprod(VBars[[ib]]) / cos(phiBars[ib] * pi / 180)^2
     } else {
       # Mo1 <- cbind(Mo1, VBars[[ib]])
-      Qc1[[ib]] <- VBars[[ib]] %*% t(VBars[[ib]]) / cos(phiBars[ib] * pi / 180)^2
+      Qc1[[ib]] <- tcrossprod(VBars[[ib]]) / cos(phiBars[ib] * pi / 180)^2
       Qc2[[ib]] <- diag(n)
     }
   }
 
 
-  Qo1 <- if (is.null(Mo1)) diag(n) * 1e-6 else Mo1 %*% t(Mo1)
-  Qo2 <- if (is.null(Mo2)) diag(n) * 1e-6 else Mo2 %*% t(Mo2)
+  Qo1 <- if (is.null(Mo1)) diag(n) * 1e-6 else tcrossprod(Mo1)
+  Qo2 <- if (is.null(Mo2)) diag(n) * 1e-6 else tcrossprod(Mo2)
 
   Vorth <- NULL
   Vnorth <- NULL
@@ -220,7 +226,7 @@ BlockJointStrucEstimateJP <- function(
   }
 
   if (!is.null(Vnorth) && ncol(Vnorth) > 0) {
-    Qc1[[length(Qc1) + 1]] <- Vnorth %*% t(Vnorth) / cos(theta0)^2
+    Qc1[[length(Qc1) + 1]] <- tcrossprod(Vnorth) / cos(theta0)^2
     Qc2[[length(Qc2) + 1]] <- diag(n)
   }
 
@@ -284,5 +290,3 @@ BlockJointStrucEstimateJP <- function(
 
   return(list(Vi = Vi, curRanks = curRanks, angles = angles))
 }
-
-

@@ -36,10 +36,7 @@ ccpSubOptJPEarlyStop <- function(v0, Qo1, Qo2, Qc1, Qc2, Vo, tau) {
   # cvx_end
 
   problem <- CVXR::Problem(CVXR::Minimize(objective), constraints)
-  result <- tryCatch(
-    solve(problem, solver = "SCS"),
-    error = function(e) solve(problem, solver = "CLARABEL")
-  )
+  result <- CVXR::solve(problem, solver = "SCS")
 
   if (!is.null(result$status) && result$status == "solved") {
     result$status <- "optimal"
