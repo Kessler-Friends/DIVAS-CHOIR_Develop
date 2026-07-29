@@ -19,13 +19,19 @@ ccpSubOptJPEarlyStop <- function(v0, Qo1, Qo2, Qc1, Qc2, Vo, tau) {
   v <- CVXR::Variable(n)
   slack <- CVXR::Variable(nc + 2)
 
-  objective <- CVXR::quad_form(v, Qo1) - 2 * t(v0) %*% Qo2 %*% v + CVXR::quad_form(v0, Qo2) + tau * sum(slack)
+  # Qo1 and each Qc1 are constructed as scaled cross-products upstream, so
+  # they are positive semidefinite by construction.  Small floating-point
+  # errors can nevertheless prevent CVXR from recognizing that property.
+  # PSDWrap records the known curvature without changing the matrix values.
+  psd_wrap <- getFromNamespace("PSDWrap", "CVXR")
+
+  objective <- CVXR::quad_form(v, psd_wrap(Qo1)) - 2 * t(v0) %*% Qo2 %*% v + CVXR::quad_form(v0, Qo2) + tau * sum(slack)
   constraints <- list()
 
   # constraints for each Qc1 and Qc2
   for (ic in 1:nc) {
     constraints <- c(constraints,
-                     CVXR::quad_form(v, Qc1[[ic]]) - 2 * t(v0) %*% Qc2[[ic]] %*% v + CVXR::quad_form(v0, Qc2[[ic]]) <= slack[ic])
+                     CVXR::quad_form(v, psd_wrap(Qc1[[ic]])) - 2 * t(v0) %*% Qc2[[ic]] %*% v + CVXR::quad_form(v0, Qc2[[ic]]) <= slack[ic])
   }
   # Addition
   constraints <- c(constraints,

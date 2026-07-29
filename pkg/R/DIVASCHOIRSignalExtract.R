@@ -60,8 +60,15 @@ DIVASCHOIRSignalExtract <- function(
 
       sampled <- character(n)
       for (sample_idx in seq_len(n)) {
-        eta <- log(p_hat[row_idx]) + sqrt(p_hat[row_idx]) * theta_hat[row_idx, sample_idx]
-        probs <- softmax_stable(eta)
+        # Express the MCA-based multinomial logits in the identifiable
+        # zero-sum parameterization.  Centering either term by a constant does
+        # not change its softmax probabilities.
+        mu_clr <- log(p_hat[row_idx])
+        mu_clr <- mu_clr - mean(mu_clr)
+        eta <- sqrt(p_hat[row_idx]) * theta_hat[row_idx, sample_idx]
+        eta <- eta - mean(eta)
+        logits <- mu_clr + eta
+        probs <- softmax_stable(logits)
         sampled[sample_idx] <- sample(levels, size = 1L, prob = probs)
       }
       sim_block[[variable$variable]] <- factor(sampled, levels = levels)

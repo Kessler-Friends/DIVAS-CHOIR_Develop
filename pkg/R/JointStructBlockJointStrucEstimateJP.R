@@ -226,7 +226,8 @@ BlockJointStrucEstimateJP <- function(
   }
 
   if (!is.null(Vnorth) && ncol(Vnorth) > 0) {
-    Qc1[[length(Qc1) + 1]] <- tcrossprod(Vnorth) / cos(theta0)^2
+    # theta0 is specified in degrees, matching MATLAB's cosd(theta0).
+    Qc1[[length(Qc1) + 1]] <- tcrossprod(Vnorth) / cos(theta0 * pi / 180)^2
     Qc2[[length(Qc2) + 1]] <- diag(n)
   }
 
