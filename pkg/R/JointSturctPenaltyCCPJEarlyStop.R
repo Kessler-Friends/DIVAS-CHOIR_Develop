@@ -22,8 +22,9 @@ ccpSubOptJPEarlyStop <- function(v0, Qo1, Qo2, Qc1, Qc2, Vo, tau) {
   # Qo1 and each Qc1 are constructed as scaled cross-products upstream, so
   # they are positive semidefinite by construction.  Small floating-point
   # errors can nevertheless prevent CVXR from recognizing that property.
-  # PSDWrap records the known curvature without changing the matrix values.
-  psd_wrap <- getFromNamespace("PSDWrap", "CVXR")
+  # CVXR 1.8 uses the non-exported lower-case psd_wrap helper.  It records
+  # the known curvature without changing the matrix values.
+  psd_wrap <- getFromNamespace("psd_wrap", "CVXR")
 
   objective <- CVXR::quad_form(v, psd_wrap(Qo1)) - 2 * t(v0) %*% Qo2 %*% v + CVXR::quad_form(v0, Qo2) + tau * sum(slack)
   constraints <- list()
@@ -42,7 +43,7 @@ ccpSubOptJPEarlyStop <- function(v0, Qo1, Qo2, Qc1, Qc2, Vo, tau) {
   # cvx_end
 
   problem <- CVXR::Problem(CVXR::Minimize(objective), constraints)
-  result <- CVXR::solve(problem, solver = "SCS")
+  result <- solve(problem, solver = "SCS")
 
   if (!is.null(result$status) && result$status == "solved") {
     result$status <- "optimal"
