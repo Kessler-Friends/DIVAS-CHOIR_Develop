@@ -5,27 +5,25 @@
 \title{Data integration via analysis of subspaces}
 \usage{
 DIVASmain(
-  continuous_datablock = NULL,
-  categorical_datablock = NULL,
+  datablock = NULL,
   nsim = 400,
   iprint = TRUE,
   colCent = FALSE,
   rowCent = FALSE,
   figdir = NULL,
   seed = NULL,
+  ReturnDetail = FALSE,
+  categorical_datablock = NULL,
   categorical_rank = NULL,
   categorical_method = c("fixed_rank", "nuclear_cv"),
   categorical_cv_folds = 5L,
   categorical_lambda_grid = NULL,
   categorical_cull = TRUE,
-  ReturnDetail = FALSE,
-  datablock = NULL
+  continuous_datablock = NULL
 )
 }
 \arguments{
-\item{continuous_datablock}{A list of matrices with the same number of columns (samples).}
-
-\item{categorical_datablock}{A list of categorical matrices or data.frames. For data.frames, each column is treated as a categorical variable measured across samples and is one-hot encoded before analysis.}
+\item{datablock}{A list of matrices with the same number of columns (samples).}
 
 \item{nsim}{Number of bootstrap resamples for inferring angle bounds.}
 
@@ -39,6 +37,10 @@ DIVASmain(
 
 \item{seed}{Optional. An integer to set the seed for the random number generator to ensure reproducibility of the bootstrap analysis. Default is `NULL`.}
 
+\item{ReturnDetail}{Logical. If FALSE (default), return a compact result list focusing on the most user-relevant elements to save storage space. If TRUE, return the full detailed result structure.}
+
+\item{categorical_datablock}{A list of categorical matrices or data.frames. Data.frames have samples as rows and categorical variables as columns; matrices have categories as rows and samples as columns.}
+
 \item{categorical_rank}{Optional initial rank for categorical blocks. The
 original DIVAS angle rule then culls unstable directions by default.}
 
@@ -50,9 +52,7 @@ original DIVAS angle rule then culls unstable directions by default.}
 
 \item{categorical_cull}{Apply the original DIVAS random-angle rank culling rule to categorical directions. Defaults to TRUE.}
 
-\item{ReturnDetail}{Logical. If FALSE (default), return Scores, scoresList, Loadings, and LoadingsNames. If TRUE, also return the detailed decomposition and diagnostic plots.}
-
-\item{datablock}{Optional legacy alias for continuous_datablock.}
+\item{continuous_datablock}{Optional alias for datablock, for calls using the categorical interface.}
 }
 \value{
 A list containing DIVAS integration results. Most important ones include
@@ -60,11 +60,13 @@ A list containing DIVAS integration results. Most important ones include
     \item{matBlocks}{List of scores representing shared and partially shared joint structures.}
     \item{matLoadings}{List of loadings linking features in each data block with scores.}
     \item{keyIdxMap}{Mapping between indices of the previous lists and data blocks.}
+    \item{Scores}{A comprehensive matrix with samples as rows and all component scores as columns. Column names follow the pattern "Block1+Block2-Y" for joint structures (e.g., "RNA+PRO-1") and "BlockName-Individual-Y" for individual structures. (Renamed from sampleScoreMatrix for clarity)}
+    \item{scoresList}{List of recalculated scores computed as X^T * Loadings for each data block, offering an alternative to the original scores. (Renamed from Scores for clarity)}
+    \item{Loadings}{List of inverse loadings matrices for each data block. Each element is a features × components matrix, where rows are features and columns are components (e.g., "RNA+PRO+MIC-1", "RNA-1", etc.). Provides better biological interpretability than original matLoadings.}
+    \item{LoadingsNames}{A list of character vectors per data block, each listing available component names in Loadings[[block]].}
   }
-  The compact result contains Scores (combined sample bases), scoresList
-  (recalculated scores per block), Loadings (normalized inverse loadings),
-  and LoadingsNames (component names per block). Set ReturnDetail = TRUE
-  to include the internal results and diagnostic_plots.
+  The compact result contains Scores, scoresList, Loadings, and LoadingsNames.
+  Set ReturnDetail = TRUE to include the internal results and diagnostic_plots.
   See Details for more explanations.
 }
 \description{
@@ -72,7 +74,7 @@ Main function for DIVAS analysis. Given a list of data blocks with matched colum
 structure with diagnostic plots.
 }
 \details{
-With ReturnDetail = TRUE, DIVASmain also returns the internal results from the DIVAS algorithm.
+DIVASmain returns a list containing all important information returned from the DIVAS algorithm.
 For users, the most important ones are scores (matBlocks), loadings (matLoadings) and an index
 book (keyIdxMap) explaining what joint structures each score or loading matrix correpsond to.
 

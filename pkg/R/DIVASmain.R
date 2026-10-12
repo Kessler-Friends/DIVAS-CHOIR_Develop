@@ -3,37 +3,40 @@
 #' Main function for DIVAS analysis. Given a list of data blocks with matched columns (samples), will return identified joint
 #' structure with diagnostic plots.
 #'
-#' @param continuous_datablock A list of matrices with the same number of columns (samples).
-#' @param categorical_datablock A list of categorical matrices or data.frames. For data.frames, each column is treated as a categorical variable measured across samples and is one-hot encoded before analysis.
+#' @param datablock A list of matrices with the same number of columns (samples).
 #' @param nsim Number of bootstrap resamples for inferring angle bounds.
 #' @param iprint Whether to print diagnostic figures.
 #' @param colCent Whether to column centre the input data blocks.
 #' @param rowCent Whether to row centre the input data blocks.
 #' @param figdir If not NULL, then diagnostic plots will be saved to this directory.
 #' @param seed Optional. An integer to set the seed for the random number generator to ensure reproducibility of the bootstrap analysis. Default is `NULL`.
-#' @param ReturnDetail Logical. If FALSE (default), return Scores, scoresList, Loadings, and LoadingsNames. If TRUE, also return the detailed decomposition and diagnostic plots.
-#' @param datablock Optional legacy alias for continuous_datablock.
+#' @param ReturnDetail Logical. If FALSE (default), return a compact result list focusing on the most user-relevant elements to save storage space. If TRUE, return the full detailed result structure.
+#'
+#' @param continuous_datablock Optional alias for datablock, for calls using the categorical interface.
+#' @param categorical_datablock A list of categorical matrices or data.frames. Data.frames have samples as rows and categorical variables as columns; matrices have categories as rows and samples as columns.
 #' @param categorical_rank Optional initial rank for categorical blocks. The
 #'   original DIVAS angle rule then culls unstable directions by default.
 #' @param categorical_method `"fixed_rank"` (default) or `"nuclear_cv"`. The latter selects a nuclear-norm penalty by cross-validation of held-out categorical responses.
 #' @param categorical_cv_folds Number of folds for categorical nuclear-norm cross-validation.
 #' @param categorical_lambda_grid Optional positive penalty values to consider. By default, ten values are generated from the MCA singular spectrum.
 #' @param categorical_cull Apply the original DIVAS random-angle rank culling rule to categorical directions. Defaults to TRUE.
-#'
+#' @importFrom MASS ginv
 #' @return A list containing DIVAS integration results. Most important ones include
 #'   \describe{
 #'     \item{matBlocks}{List of scores representing shared and partially shared joint structures.}
 #'     \item{matLoadings}{List of loadings linking features in each data block with scores.}
 #'     \item{keyIdxMap}{Mapping between indices of the previous lists and data blocks.}
+#'     \item{Scores}{A comprehensive matrix with samples as rows and all component scores as columns. Column names follow the pattern "Block1+Block2-Y" for joint structures (e.g., "RNA+PRO-1") and "BlockName-Individual-Y" for individual structures. (Renamed from sampleScoreMatrix for clarity)}
+#'     \item{scoresList}{List of recalculated scores computed as X^T * Loadings for each data block, offering an alternative to the original scores. (Renamed from Scores for clarity)}
+#'     \item{Loadings}{List of inverse loadings matrices for each data block. Each element is a features × components matrix, where rows are features and columns are components (e.g., "RNA+PRO+MIC-1", "RNA-1", etc.). Provides better biological interpretability than original matLoadings.}
+#'     \item{LoadingsNames}{A list of character vectors per data block, each listing available component names in Loadings[[block]].}
 #'   }
-#'   The compact result contains Scores (combined sample bases), scoresList
-#'   (recalculated scores per block), Loadings (normalized inverse loadings),
-#'   and LoadingsNames (component names per block). Set ReturnDetail = TRUE
-#'   to include the internal results and diagnostic_plots.
+#'   The compact result contains Scores, scoresList, Loadings, and LoadingsNames.
+#'   Set ReturnDetail = TRUE to include the internal results and diagnostic_plots.
 #'   See Details for more explanations.
 #'
 #' @details
-#' With ReturnDetail = TRUE, DIVASmain also returns the internal results from the DIVAS algorithm.
+#' DIVASmain returns a list containing all important information returned from the DIVAS algorithm.
 #' For users, the most important ones are scores (matBlocks), loadings (matLoadings) and an index
 #' book (keyIdxMap) explaining what joint structures each score or loading matrix correpsond to.
 #'
@@ -46,32 +49,45 @@
 #' Prothero, J., Jiang, M., Hannig, J., Tran-Dinh, Q., Ackerman, A. and Marron, J. S. (2024).
 #' Data integration via analysis of subspaces (DIVAS). Test.
 #'
+#'
+#' @export
 DIVASmain <- function(
-    continuous_datablock = NULL, categorical_datablock = NULL, nsim = 400,
-    iprint = TRUE, colCent = FALSE, rowCent = FALSE, figdir = NULL, seed = NULL,
-    categorical_rank = NULL, categorical_method = c("fixed_rank", "nuclear_cv"),
+    datablock = NULL, nsim = 400, iprint = TRUE, colCent = FALSE, rowCent = FALSE,
+    figdir = NULL, seed = NULL, ReturnDetail = FALSE,
+    categorical_datablock = NULL, categorical_rank = NULL,
+    categorical_method = c("fixed_rank", "nuclear_cv"),
     categorical_cv_folds = 5L, categorical_lambda_grid = NULL,
-    categorical_cull = TRUE, ReturnDetail = FALSE, datablock = NULL
+    categorical_cull = TRUE, continuous_datablock = NULL
   ){
-  if (!is.null(datablock)) {
-    if (!is.null(continuous_datablock)) {
+  if (!is.null(continuous_datablock)) {
+    if (!is.null(datablock)) {
       stop("Supply only one of `datablock` and `continuous_datablock`.")
     }
-    continuous_datablock <- datablock
+    datablock <- continuous_datablock
   }
+  datablock <- if (is.null(datablock)) list() else datablock
+  categorical_datablock <- if (is.null(categorical_datablock)) list() else categorical_datablock
   categorical_method <- match.arg(categorical_method)
   if (categorical_method == "nuclear_cv" && !is.null(categorical_rank)) {
     stop("`categorical_rank` cannot be combined with `categorical_method = 'nuclear_cv'`.")
   }
-  continuous_datablock <- if (is.null(continuous_datablock)) list() else continuous_datablock
-  categorical_datablock <- if (is.null(categorical_datablock)) list() else categorical_datablock
 
-  # Initialize continuous parameters
-  continuous_nb <- length(continuous_datablock)
-  continuous_dataname <- names(continuous_datablock)
-  if(is.null(continuous_dataname) && continuous_nb > 0){
-    warning("Input continuous_datablock is unnamed, generic names for continuous data blocks generated.")
-    continuous_dataname <- paste0("ContinuousDatablock", 1:continuous_nb)
+  # Initialize parameters
+  nb <- length(datablock)
+  dataname <- names(datablock)
+  if(is.null(dataname) && nb > 0){
+    warning("Input datablock is unnamed, generic names for data blocks generated.")
+    dataname <- paste0("Datablock", 1:nb)
+  }
+
+  if (any(vapply(datablock, function(i) {
+    !is.matrix(i)
+  }, logical(1)))) {
+    stop("datablock must be a list of matrices")
+  }
+
+  if (nb + length(categorical_datablock) == 0) {
+    stop("Supply at least one continuous or categorical data block.")
   }
 
   # Initialize categorical parameters
@@ -86,14 +102,14 @@ DIVASmain <- function(
   theta0 <- 45
   optArgin <- list(0.5, 1000, 1.05, 50, 1e-3, 1e-3)
   filterPerc <- 1 - (2 / (1 + sqrt(5))) # "Golden Ratio"
-  continuous_noisepercentile <- rep(0.5, continuous_nb)
+  noisepercentile <- rep(0.5, nb)
 
 
-  continuous_rowSpaces <- vector("list", continuous_nb)
+  rowSpaces <- vector("list", nb)
   # datablockc <- vector("list", nb)
-  for (ib in seq_len(continuous_nb)) {
-    continuous_rowSpaces[[ib]] <- 0
-    continuous_datablock[[ib]] <- MatCenterJP(continuous_datablock[[ib]], colCent, rowCent)
+  for (ib in seq_len(nb)) {
+    rowSpaces[[ib]] <- 0
+    datablock[[ib]] <- MatCenterJP(datablock[[ib]], colCent, rowCent)
   }
 
   categorical_rowSpaces <- vector("list", categorical_nb)
@@ -112,11 +128,11 @@ DIVASmain <- function(
     categorical_datablock[[ib]] <- MatCenterDIVASCHOIR(categorical_datablock[[ib]])
   }
 
-  # Step 1: Estimate continuous signal space and perturbation angle
-  if (continuous_nb > 0) {
+  # Step 1: Estimate signal space and perturbation angle
+  if (nb > 0) {
     Phase1_continuous <- DJIVESignalExtractJP(
-      datablock = continuous_datablock, nsim = nsim,
-      iplot = FALSE, colCent = colCent, rowCent = rowCent, cull = filterPerc, noisepercentile = continuous_noisepercentile,
+      datablock = datablock, nsim = nsim,
+      iplot = FALSE, colCent = colCent, rowCent = rowCent, cull = filterPerc, noisepercentile = noisepercentile,
       seed = seed
     )
   } else {
@@ -147,7 +163,7 @@ DIVASmain <- function(
     )
   }
 
-  Phase1_combined <- list(
+  Phase1 <- list(
     VBars = c(Phase1_continuous$VBars, Phase1_categorical$VBars),
     UBars = c(Phase1_continuous$UBars, Phase1_categorical$UBars),
     phiBars = c(Phase1_continuous$phiBars, Phase1_categorical$phiBars),
@@ -161,14 +177,16 @@ DIVASmain <- function(
     UUHatCacheBars = c(Phase1_continuous$UUHatCacheBars, Phase1_categorical$UUHatCacheBars)
   )
 
-  combined_datablock <- c(continuous_datablock, categorical_datablock)
-  combined_dataname <- c(continuous_dataname, categorical_dataname)
-
-  # Original post-processing operates on the combined feature-by-sample blocks.
-  datablock <- combined_datablock
-  dataname <- combined_dataname
+  # Continue the original DIVAS pipeline with both types of signal spaces.
+  continuous_nb <- nb
+  datablock <- c(datablock, categorical_datablock)
+  dataname <- c(dataname, categorical_dataname)
   nb <- length(datablock)
-  sample_ids <- if (nb > 0) colnames(datablock[[1]]) else NULL
+  n <- ncol(datablock[[1]]) # Get number of samples
+
+  # ---- Extract sample IDs from column names ----
+  # Assumes all data blocks have the same samples in the same order
+  sample_ids <- colnames(datablock[[1]])
 
   # VBars <- Phase1[[1]]
   # UBars <- Phase1[[2]]
@@ -181,9 +199,8 @@ DIVASmain <- function(
 
   # Step 2: Estimate joint and partially joint structure
   Phase2 <- DJIVEJointStrucEstimateJP(
-    VBars = Phase1_combined$VBars, UBars = Phase1_combined$UBars, phiBars =  Phase1_combined$phiBars, psiBars =  Phase1_combined$psiBars,
-    rBars = Phase1_combined$rBars, dataname = combined_dataname, theta0 = theta0,
-    optArgin = optArgin, iprint = iprint, figdir = figdir
+    VBars = Phase1$VBars, UBars = Phase1$UBars, phiBars =  Phase1$phiBars, psiBars =  Phase1$psiBars,
+    rBars = Phase1$rBars, dataname = dataname, iprint = iprint, figdir = figdir
   )
 
   # outMap <- Phase2[[1]]
@@ -192,49 +209,49 @@ DIVASmain <- function(
 
   # Step 3: Reconstruct DJIVE decomposition
   outstruct <- DJIVEReconstructMJ(
-    datablock = combined_datablock, dataname =  combined_dataname, outMap =  Phase2$outMap,
+    datablock = datablock, dataname =  dataname, outMap =  Phase2$outMap,
     keyIdxMap =  Phase2$keyIdxMap, jointBlockOrder =  Phase2$jointBlockOrder, doubleCenter =  0
   )
 
-  outstruct$rBars <- Phase1_combined$rBars
-  outstruct$phiBars <- Phase1_combined$phiBars
-  outstruct$psiBars <- Phase1_combined$psiBars
-  outstruct$VBars <- Phase1_combined$VBars
-  outstruct$UBars <- Phase1_combined$UBars
-  outstruct$VVHatCacheBars <- Phase1_combined$VVHatCacheBars
-  outstruct$UUHatCacheBars <- Phase1_combined$UUHatCacheBars
+  outstruct$rBars <- Phase1$rBars
+  outstruct$phiBars <- Phase1$phiBars
+  outstruct$psiBars <- Phase1$psiBars
+  outstruct$VBars <- Phase1$VBars
+  outstruct$UBars <- Phase1$UBars
+  outstruct$VVHatCacheBars <- Phase1$VVHatCacheBars
+  outstruct$UUHatCacheBars <- Phase1$UUHatCacheBars
   outstruct$Phase1_continuous <- Phase1_continuous
   outstruct$Phase1_categorical <- Phase1_categorical
   outstruct$categorical_method <- categorical_method
   outstruct$categorical_lambda <- if (categorical_method == "nuclear_cv") categorical_lambda else NULL
   outstruct$categorical_cv <- if (categorical_method == "nuclear_cv") categorical_cv else NULL
-  outstruct$Phase1_combined <- Phase1_combined
+  outstruct$Phase1_combined <- Phase1
   outstruct$jointBasisMapRaw <- Phase2$outMap
 
   # Automatically generate keymapname from keymapid
   ids <- as.integer(names(outstruct$keyIdxMap))
-  num_blocks <- length(combined_dataname)
+  num_blocks <- length(dataname)
 
   keymapname <- sapply(ids, function(id) {
     binary_str <- R.utils::intToBin(id)
     padded_binary_str <- sprintf(paste0("%0", num_blocks, "s"), binary_str)
     binary_chars <- strsplit(padded_binary_str, "")[[1]]
     selected_indices <- which(rev(binary_chars) == '1')
-    selected_names <- combined_dataname[selected_indices]
+    selected_names <- dataname[selected_indices]
     paste(selected_names, collapse = "+")
   })
 
   names(keymapname) <- names(outstruct$keyIdxMap)
   outstruct$keymapname <- keymapname
-  outstruct$combined_datablock <- combined_datablock
-  outstruct$combined_dataname <- combined_dataname
+  outstruct$combined_datablock <- datablock
+  outstruct$combined_dataname <- dataname
   outstruct$categorical_datablock <- categorical_datablock
   outstruct$categorical_dataname <- categorical_dataname
 
   diagnostic_plots <- tryCatch(
     DJIVEAngleDiagnosticJP(
-      datablock = combined_datablock,
-      dataname = combined_dataname,
+      datablock = datablock,
+      dataname = dataname,
       outstruct = outstruct,
       randseed = if (is.null(seed)) 1 else seed,
       titlestr = "DIVAS diagnostics"
@@ -444,12 +461,11 @@ DIVASmain <- function(
     if (length(valid_loadings) == 0) {
       stop("No valid loadings found for this omic block")
     }
-
-
+    # Step 2: Horizontally concatenate all loadings: [L_i,k]_{i|k∈i}
     L_concatenated <- do.call(cbind, valid_loadings)
 
     # Step 3: Compute generalized inverse of concatenated loadings
-    L_concat_pinv_T <- t(MASS::ginv(L_concatenated))
+    L_concat_pinv_T <- t(ginv(L_concatenated))
     loading_norms <- sqrt(colSums(L_concat_pinv_T^2))
     loading_norms[loading_norms == 0] <- 1
     L_concat_pinv_T <- scale(L_concat_pinv_T, center = FALSE, scale = loading_norms)
@@ -487,7 +503,7 @@ DIVASmain <- function(
       newLoadings <- computLoadings(outstruct, omic_block = block_idx)
 
       # Store the inverse loadings as a matrix per block:
-
+      # - Each block: features × components matrix
       # - More intuitive structure than nested lists
       outstruct$Loadings[[block_idx]] <- newLoadings
       outstruct$LoadingsNames[[block_idx]] <- colnames(newLoadings)
