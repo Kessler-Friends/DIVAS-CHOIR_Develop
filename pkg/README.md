@@ -61,13 +61,48 @@ datablock <- list(
   X3 = data$datablock[1,3][[1]][[1]]
 )
 
-result <- DIVASmain(datablock)
+result <- DIVASmain(continuous_datablock = datablock)
 dataname <- paste0("DataBlock_", 1:length(datablock))
 plots <- DJIVEAngleDiagnosticJP(datablock, dataname, result, 566, "Demo")
 print(plots)
 ```
 
 For more detailed tutorials, see the documentation website and linked case studies below.
+
+### Categorical nuclear-norm rank selection
+
+The optional `nuclear_cv` method selects a penalty separately for each
+categorical block. It holds out complete subject-by-variable responses, fits a
+nuclear-norm-penalized MCA matrix on the remaining responses, and chooses the
+penalty with the lowest held-out squared error in MCA coordinates. The full
+categorical block is then refit by soft-thresholding its singular values.
+The default starts from an initial categorical rank (set with
+`categorical_rank`) and then applies DIVAS's original random-angle culling
+rule to the multinomial bootstrap angles. The retained rank and cutoffs are
+in `result$Phase1_categorical$rankDiagnostics`. Set
+`categorical_cull = FALSE` only to reproduce a fixed-rank analysis.
+Bootstrap MCA uses empirical category proportions without an added count.
+If a level is absent in a simulated draw, its row is zero in the common
+category space. Nuclear cross-validation likewise omits levels absent from
+a training fold when computing that fold's validation error.
+
+```R
+result <- DIVASmain(
+  continuous_datablock = list(RNA = rna_matrix),
+  categorical_datablock = list(clinical = clinical_data_frame),
+  categorical_method = "nuclear_cv",
+  categorical_cv_folds = 5,
+  seed = 42
+)
+result$categorical_lambda
+result$categorical_cv[[1]]$cv
+```
+
+`clinical_data_frame` has one row per subject and one column per categorical
+variable. `rna_matrix` has features in rows and the same subjects in columns.
+The selected penalty is in the scale of the centered, weighted MCA matrix;
+the CV score is a reconstruction error, rather than multinomial likelihood.
+Use `categorical_lambda_grid` to supply candidate penalties explicitly.
 
 ## Available Datasets
 
@@ -76,8 +111,15 @@ We provide the following examples to illustrate the use of DIVAS in different sc
 | Dataset             | Brief Description                                  | Vignette Link                                                                                              | Format | Primary Reference      |
 |---------------------|----------------------------------------------------|------------------------------------------------------------------------------------------------------------|--------|------------------------|
 | toyDataThreeWay.mat | Synthetic 3-block data with known joint structures | [Toy Dataset Example](https://byronsyun.github.io/DIVAS_Develop/articles/DIVAS_Toy_Dataset_Example.html) | .mat   | Prothero et al. (2024) |
+| toyDataThreeWayCategorical.rds | Mixed version of the three-block toy: X1 and X2 continuous, X3 converted to 36 binary traits from its three leading sample directions | `data-raw/build_toy_threeway_categorical.R` | .rds | Derived from Prothero et al. (2024) |
 | gnp_imputed.qs      | GNP economic time series data                      | [GNP Dataset Example](https://byronsyun.github.io/DIVAS_Develop/articles/DIVAS_GNP_Dataset_Example.html) | .qs    | Stock & Watson (2016)  |
 | COVID-19 Multi-Omics | 6-block integration: scRNA-seq (4 cell types), proteomics, metabolomics from 114 COVID-19 patient samples | [COVID Case Study](https://byronsyun.github.io/DIVAS_COVID19_CaseStudy/) | .rds   | Su et al. (2020) |
+
+The mixed toy can be loaded with
+`readRDS(system.file("extdata", "toyDataThreeWayCategorical.rds", package = "DIVAS"))`.
+Pass its `continuous` and `categorical` lists to `DIVASmain()`.
+The conversion is deterministic and uses X3 alone; the R script in `data-raw`
+regenerates it from the original MATLAB file.
 
 ## Case Study: COVID-19 Multi-Omics Analysis
 

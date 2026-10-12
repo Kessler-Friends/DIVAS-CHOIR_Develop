@@ -12,7 +12,11 @@
 #' @param seed Optional. An integer to set the seed for the random number
 #'   generator.
 #' @param fixed_rank Optional. A positive integer, or one positive integer per
-#'   categorical block, specifying the categorical signal rank.
+#'   categorical block, specifying the initial categorical signal rank before
+#'   the original DIVAS random-angle culling step.
+#' @param lambda Optional positive nuclear-norm penalty, one per block or a
+#'   shared value. Singular values are soft-thresholded by this value.
+#' @param cull_rank Apply the original DIVAS random-angle rank culling rule.
 #'
 #' @return A list containing:
 #'   \describe{
@@ -20,19 +24,21 @@
 #'     \item{UBars}{List of category-space left singular vector matrices.}
 #'     \item{phiBars}{Vector of adjusted perturbation angles.}
 #'     \item{psiBars}{Vector of loadings perturbation angles.}
-#'     \item{EHats}{List of residual matrices after rank-5 reconstruction.}
+#'     \item{EHats}{List of residual matrices after initial-rank reconstruction.}
 #'     \item{rBars}{Vector of retained ranks for each categorical block.}
 #'     \item{singVals}{List of singular values for each categorical block.}
 #'     \item{singValsHat}{List of rank-truncated singular values.}
 #'     \item{rSteps}{List of retained rank values.}
 #'     \item{VVHatCacheBars}{List of empty bootstrap cache placeholders.}
 #'     \item{UUHatCacheBars}{List of empty bootstrap cache placeholders.}
+#'     \item{rankDiagnostics}{Per-block bootstrap angle quantiles and culling cutoffs.}
 #'   }
 #'
 #' @export
 DIVASCHOIRSignalExtract <- function(
     datablock, nsim = 400,
-    iplot = FALSE, cull = 0.382, seed = NULL, fixed_rank = NULL
+    iplot = FALSE, cull = 0.382, seed = NULL, fixed_rank = NULL,
+    lambda = NULL, cull_rank = TRUE
 ) {
 
   if (!is.null(seed)) {
@@ -58,16 +64,14 @@ DIVASCHOIRSignalExtract <- function(
         stop("Could not match categorical levels back to MCA rows for variable ", variable$variable, ".")
       }
 
+      p_variable <- p_hat[row_idx]
+      mu_clr <- log(p_variable) - mean(log(p_variable))
+      eta <- mca_natural_back_map(p_variable) %*%
+        theta_hat[row_idx, , drop = FALSE]
+      eta <- sweep(eta, 2L, colMeans(eta), "-")
       sampled <- character(n)
       for (sample_idx in seq_len(n)) {
-        # Express the MCA-based multinomial logits in the identifiable
-        # zero-sum parameterization.  Centering either term by a constant does
-        # not change its softmax probabilities.
-        mu_clr <- log(p_hat[row_idx])
-        mu_clr <- mu_clr - mean(mu_clr)
-        eta <- sqrt(p_hat[row_idx]) * theta_hat[row_idx, sample_idx]
-        eta <- eta - mean(eta)
-        logits <- mu_clr + eta
+        logits <- mu_clr + eta[, sample_idx]
         probs <- softmax_stable(logits)
         sampled[sample_idx] <- sample(levels, size = 1L, prob = probs)
       }
@@ -76,7 +80,7 @@ DIVASCHOIRSignalExtract <- function(
 
     sim_block <- as.data.frame(sim_block, stringsAsFactors = TRUE)
     rownames(sim_block) <- colnames(theta_hat)
-    MatCenterDIVASCHOIR(sim_block)
+    MatCenterDIVASCHOIR(sim_block, allow_empty_levels = TRUE)
   }
 
   # Check input dimensions
@@ -99,6 +103,14 @@ DIVASCHOIRSignalExtract <- function(
       stop("`fixed_rank` must be a positive integer or one positive integer per categorical block.")
     }
   }
+  if (!is.null(lambda)) {
+    if (!is.null(fixed_rank)) stop("`lambda` and `fixed_rank` cannot be used together.")
+    if (length(lambda) == 1L) lambda <- rep(lambda, nb)
+    if (length(lambda) != nb || anyNA(lambda) ||
+        any(!is.finite(lambda)) || any(lambda <= 0)) {
+      stop("`lambda` must contain one positive finite value per categorical block.")
+    }
+  }
 
   # Initialize the output lists
   VBars <- vector("list", nb) # adjusted signal row spaces
@@ -112,6 +124,7 @@ DIVASCHOIRSignalExtract <- function(
   rSteps <- vector("list", nb) # signal rank adjustment steps
   VVHatCacheBars <- vector("list", nb) # cached VVHat matrices for bootstrap samples
   UUHatCacheBars <- vector("list", nb) # cached UUHat matrices for bootstrap samples
+  rankDiagnostics <- vector("list", nb)
 
   # Loop through each block
   for (ib in seq_len(nb)) {
@@ -132,14 +145,20 @@ DIVASCHOIRSignalExtract <- function(
 
     cat("Categorical datablock dimensions:", d, "features;", n, "samples \n")
 
-    # Fixed initial categorical signal rank by truncated SVD.
+    # Initial categorical signal rank by truncated SVD.
     sv <- svd(datablockc)
 
-    rHat <- min(if (is.null(fixed_rank)) 5L else fixed_rank[ib], length(sv$d))
+    rHat <- if (is.null(lambda)) {
+      min(if (is.null(fixed_rank)) 5L else fixed_rank[ib], length(sv$d))
+    } else sum(sv$d > lambda[ib])
+    if (rHat == 0L) {
+      stop("Nuclear penalty removed every categorical direction in block ",
+           dataname[ib], "; use a smaller `categorical_lambda_grid`.")
+    }
     idx <- seq_len(rHat)
 
     U_hat <- sv$u[, idx, drop = FALSE]
-    d_hat <- sv$d[idx]
+    d_hat <- if (is.null(lambda)) sv$d[idx] else sv$d[idx] - lambda[ib]
     V_hat <- sv$v[, idx, drop = FALSE]
 
     signal_hat <- U_hat %*%
@@ -158,8 +177,7 @@ DIVASCHOIRSignalExtract <- function(
 
     rSteps[[ib]] <- rHat
 
-    # Bootstrap estimation for perturbation-angle bounds. The categorical
-    # signal rank is fixed at rHat; bootstrapping should not cull dimensions.
+    # Bootstrap estimation for perturbation-angle bounds and DIVAS rank culling.
     PCAnglesCacheFullBoot <- matrix(90, nsim, rHat)
     PCAnglesCacheFullBootLoad <- matrix(90, nsim, rHat)
 
@@ -189,25 +207,38 @@ DIVASCHOIRSignalExtract <- function(
     randAngleLoad <- as.numeric(randAngleLoad)
     cull <- as.numeric(cull)
 
-    validPC <- rep(TRUE, rHat)
-    rBar <- rHat
+    subject_q95 <- apply(PCAnglesCacheFullBoot, 2L, stats::quantile, probs = 0.95)
+    feature_q95 <- apply(PCAnglesCacheFullBootLoad, 2L, stats::quantile, probs = 0.95)
+    subject_cutoff <- randAngle * cull
+    feature_cutoff <- randAngleLoad * cull
+    validPC <- if (cull_rank) subject_q95 < subject_cutoff else rep(TRUE, rHat)
+    if (cull_rank) validPC[1L] <- TRUE
+    retained <- which(validPC)
+    rBar <- length(retained)
     phiBar <- stats::quantile(PCAnglesCacheFullBoot[, rBar], 0.95)
     psiBar <- stats::quantile(PCAnglesCacheFullBootLoad[, rBar], 0.95)
+    rankDiagnostics[[ib]] <- data.frame(
+      direction = seq_len(rHat), subject_q95_deg = as.numeric(subject_q95),
+      feature_q95_deg = as.numeric(feature_q95),
+      subject_random_deg = randAngle, feature_random_deg = randAngleLoad,
+      subject_cutoff_deg = subject_cutoff, feature_cutoff_deg = feature_cutoff,
+      retained = validPC
+    )
 
     cat(sprintf("Culled Rank is %d.\n", rBar))
 
     VVHatCacheBar <- vector("list", nsim)
     UUHatCacheBar <- vector("list", nsim)
-    singValsTildeBar <- singValsTilde[seq_len(rBar)]
+    singValsTildeBar <- singValsTilde[retained]
     for (s in seq_len(nsim)) {
-      theta_bar <- U_hat[, seq_len(rBar), drop = FALSE] %*%
+      theta_bar <- U_hat[, retained, drop = FALSE] %*%
         diag(singValsTildeBar, nrow = length(singValsTildeBar)) %*%
-        t(V_hat[, seq_len(rBar), drop = FALSE])
+        t(V_hat[, retained, drop = FALSE])
       rownames(theta_bar) <- rownames(datablockc)
       colnames(theta_bar) <- colnames(datablockc)
       randX <- simulate_mca_multinomial(theta_bar, p_hat, variable_levels)
-      randU <- U_hat[, seq_len(rBar), drop = FALSE]
-      randV <- V_hat[, seq_len(rBar), drop = FALSE]
+      randU <- U_hat[, retained, drop = FALSE]
+      randV <- V_hat[, retained, drop = FALSE]
       svdRand <- svd(randX)
       randUHat <- svdRand$u[, seq_len(rBar), drop = FALSE]
       randVHat <- svdRand$v[, seq_len(rBar), drop = FALSE]
@@ -255,6 +286,7 @@ DIVASCHOIRSignalExtract <- function(
     singValsHat = singValsHat,
     rSteps = rSteps,
     VVHatCacheBars = VVHatCacheBars,
-    UUHatCacheBars = UUHatCacheBars
+    UUHatCacheBars = UUHatCacheBars,
+    rankDiagnostics = rankDiagnostics
   ))
 }

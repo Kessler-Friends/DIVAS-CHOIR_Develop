@@ -56,14 +56,20 @@ MatCenterJP <- function(X, iColCent = F, iRowCent = F) {
 #'
 #' @param block A data.frame or matrix containing categorical variables measured
 #'   across samples. Rows are samples and columns are categorical variables.
+#' @param allow_empty_levels If TRUE, retain an unobserved factor level as a
+#'   zero row. This is used for bootstrap samples so all draws have the same
+#'   category rows as the observed block.
 #'
 #' @return A numeric matrix with categories/features in rows and samples in
 #'   columns.
 #'
 #' @export
-MatCenterDIVASCHOIR <- function(block) {
+MatCenterDIVASCHOIR <- function(block, allow_empty_levels = FALSE) {
+  if (!is.logical(allow_empty_levels) || length(allow_empty_levels) != 1L ||
+      is.na(allow_empty_levels))
+    stop("`allow_empty_levels` must be TRUE or FALSE.")
   block <- as.data.frame(block)
-  block[] <- lapply(block, factor)
+  block[] <- lapply(block, function(x) if (is.factor(x)) x else factor(x))
 
   indicator_list <- Map(function(x, variable_name) {
     mm <- stats::model.matrix(~ x - 1)
@@ -73,9 +79,15 @@ MatCenterDIVASCHOIR <- function(block) {
   }, block, names(block))
   indicator <- do.call(cbind, indicator_list)
   p_hat <- colMeans(indicator)
+  names(p_hat) <- colnames(indicator)
+  present <- p_hat > 0
+  if (any(!present) && !allow_empty_levels)
+    stop("A categorical level is unobserved; remove unused levels from the observed block.")
 
   svd_input <- sweep(t(indicator), 1, p_hat, "-")
-  svd_input <- sweep(svd_input, 1, sqrt(p_hat), "/")
+  svd_input[present, ] <- sweep(svd_input[present, , drop = FALSE],
+                               1, sqrt(p_hat[present]), "/")
+  svd_input[!present, ] <- 0
 
   colnames(svd_input) <- rownames(block)
   attr(svd_input, "divaschoir_variable_levels") <- Map(function(variable_name, indicator_matrix) {
@@ -88,6 +100,17 @@ MatCenterDIVASCHOIR <- function(block) {
   }, names(block), indicator_list)
   attr(svd_input, "divaschoir_p_hat") <- p_hat
   svd_input
+}
+
+# Moore-Penrose inverse of the manuscript's within-variable Fisher square
+# root, (diag(p) - p p^T)^(1/2), on the contrast space.
+mca_natural_back_map <- function(p) {
+  covariance <- diag(p) - tcrossprod(p)
+  eig <- eigen(covariance, symmetric = TRUE)
+  cutoff <- max(eig$values) * 1e-10
+  inverse_sqrt <- ifelse(eig$values > cutoff,
+                         1 / sqrt(pmax(eig$values, cutoff)), 0)
+  (eig$vectors * rep(inverse_sqrt, each = length(p))) %*% t(eig$vectors)
 }
 #
 # ####################################test######################################
