@@ -85,10 +85,22 @@ DJIVEAngleDiagnosticJP <- function(
   for (ib in seq_len(nb)) {
     trueObjKeys <- names(outstruct$matLoadings[[ib]])#same but 756
     ds[ib] <- nrow(outstruct$matLoadings[[ib]][[trueObjKeys[1]]])
-    randAngleCache <- randDirAngleMJ(n, rBars[ib], 1000)
-    randAngleCacheLoad <- randDirAngleMJ(ds[ib], rBars[ib], 1000)
-    randAngleTraits[ib] <- quantile(randAngleCache, 0.05)#small diff
-    randAngleObjects[ib] <- quantile(randAngleCacheLoad, 0.05)#small diff
+    categorical_index <- match(dataname[ib], outstruct$categorical_dataname)
+    categorical_diagnostics <- outstruct$Phase1_categorical$rankDiagnostics
+    if (!is.na(categorical_index) &&
+        length(categorical_diagnostics) >= categorical_index &&
+        !is.null(categorical_diagnostics[[categorical_index]])) {
+      # Use the null references from categorical signal extraction. These
+      # describe categorical draws against a fixed estimated null subspace.
+      reference <- categorical_diagnostics[[categorical_index]]
+      randAngleTraits[ib] <- reference$subject_random_deg[1L]
+      randAngleObjects[ib] <- reference$feature_random_deg[1L]
+    } else {
+      randAngleCache <- randDirAngleMJ(n, rBars[ib], 1000)
+      randAngleCacheLoad <- randDirAngleMJ(ds[ib], rBars[ib], 1000)
+      randAngleTraits[ib] <- quantile(randAngleCache, 0.05)
+      randAngleObjects[ib] <- quantile(randAngleCacheLoad, 0.05)
+    }
 
     #under check
     gothVi <- lapply(names(outstruct$matLoadings[[ib]]), function(key) outstruct$jointBasisMap[[key]])

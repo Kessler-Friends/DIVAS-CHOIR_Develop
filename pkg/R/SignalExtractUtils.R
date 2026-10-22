@@ -79,51 +79,21 @@ MatCenterDIVASCHOIR <- function(block, allow_empty_levels = FALSE) {
   }, block, names(block))
   indicator <- do.call(cbind, indicator_list)
   p_hat <- colMeans(indicator)
-  names(p_hat) <- colnames(indicator)
-  present <- p_hat > 0
-  if (any(!present) && !allow_empty_levels)
+  if (any(p_hat == 0) && !allow_empty_levels)
     stop("A categorical level is unobserved; remove unused levels from the observed block.")
 
   svd_input <- sweep(t(indicator), 1, p_hat, "-")
-  svd_input[present, ] <- sweep(svd_input[present, , drop = FALSE],
-                               1, sqrt(p_hat[present]), "/")
-  svd_input[!present, ] <- 0
+  # An absent bootstrap category is already a zero row; divide it by one.
+  svd_input <- sweep(svd_input, 1, sqrt(ifelse(p_hat > 0, p_hat, 1)), "/")
 
   colnames(svd_input) <- rownames(block)
   attr(svd_input, "divaschoir_variable_levels") <- Map(function(variable_name, indicator_matrix) {
-    x <- block[[variable_name]]
     list(
       variable = variable_name,
-      levels = levels(x),
+      levels = levels(block[[variable_name]]),
       rows = colnames(indicator_matrix)
     )
   }, names(block), indicator_list)
   attr(svd_input, "divaschoir_p_hat") <- p_hat
   svd_input
 }
-
-# Moore-Penrose inverse of the manuscript's within-variable Fisher square
-# root, (diag(p) - p p^T)^(1/2), on the contrast space.
-mca_natural_back_map <- function(p) {
-  covariance <- diag(p) - tcrossprod(p)
-  eig <- eigen(covariance, symmetric = TRUE)
-  cutoff <- max(eig$values) * 1e-10
-  inverse_sqrt <- ifelse(eig$values > cutoff,
-                         1 / sqrt(pmax(eig$values, cutoff)), 0)
-  (eig$vectors * rep(inverse_sqrt, each = length(p))) %*% t(eig$vectors)
-}
-#
-# ####################################test######################################
-# # Sample data matrix
-# X <- matrix(c(1, 2, 333, 4, 5, 6, 7, 8, 9), nrow = 3, ncol = 3, byrow = TRUE)
-# print("Test matrix:")
-# print(X)
-#
-# print("Centering by columns only:")
-# print(MatCenterJP(X, iColCent = TRUE, iRowCent = FALSE))
-#
-# print("Centering by rows only:")
-# print(MatCenterJP(X, iColCent = FALSE, iRowCent = TRUE))
-#
-# print("Centering by both rows and columns:")
-# print(MatCenterJP(X, iColCent = TRUE, iRowCent = TRUE))

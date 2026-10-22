@@ -18,7 +18,7 @@ DIVASmain(
   categorical_method = c("fixed_rank", "nuclear_cv"),
   categorical_cv_folds = 5L,
   categorical_lambda_grid = NULL,
-  categorical_cull = TRUE,
+  categorical_cull = FALSE,
   continuous_datablock = NULL
 )
 }
@@ -41,8 +41,7 @@ DIVASmain(
 
 \item{categorical_datablock}{A list of categorical matrices or data.frames. Data.frames have samples as rows and categorical variables as columns; matrices have categories as rows and samples as columns.}
 
-\item{categorical_rank}{Optional initial rank for categorical blocks. The
-original DIVAS angle rule then culls unstable directions by default.}
+\item{categorical_rank}{Optional initial rank for categorical blocks. All initial directions are retained unless categorical culling is explicitly enabled.}
 
 \item{categorical_method}{`"fixed_rank"` (default) or `"nuclear_cv"`. The latter selects a nuclear-norm penalty by cross-validation of held-out categorical responses.}
 
@@ -50,7 +49,7 @@ original DIVAS angle rule then culls unstable directions by default.}
 
 \item{categorical_lambda_grid}{Optional positive penalty values to consider. By default, ten values are generated from the MCA singular spectrum.}
 
-\item{categorical_cull}{Apply the original DIVAS random-angle rank culling rule to categorical directions. Defaults to TRUE.}
+\item{categorical_cull}{Apply rank culling using simulated categorical null angles. Defaults to FALSE, retaining the initial categorical rank.}
 
 \item{continuous_datablock}{Optional alias for datablock, for calls using the categorical interface.}
 }

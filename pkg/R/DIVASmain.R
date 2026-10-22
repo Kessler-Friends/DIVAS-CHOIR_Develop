@@ -15,11 +15,11 @@
 #' @param continuous_datablock Optional alias for datablock, for calls using the categorical interface.
 #' @param categorical_datablock A list of categorical matrices or data.frames. Data.frames have samples as rows and categorical variables as columns; matrices have categories as rows and samples as columns.
 #' @param categorical_rank Optional initial rank for categorical blocks. The
-#'   original DIVAS angle rule then culls unstable directions by default.
+#'   initial directions are retained unless categorical culling is enabled.
 #' @param categorical_method `"fixed_rank"` (default) or `"nuclear_cv"`. The latter selects a nuclear-norm penalty by cross-validation of held-out categorical responses.
 #' @param categorical_cv_folds Number of folds for categorical nuclear-norm cross-validation.
 #' @param categorical_lambda_grid Optional positive penalty values to consider. By default, ten values are generated from the MCA singular spectrum.
-#' @param categorical_cull Apply the original DIVAS random-angle rank culling rule to categorical directions. Defaults to TRUE.
+#' @param categorical_cull Apply rank culling using simulated categorical null angles. Defaults to FALSE, retaining the initial categorical rank.
 #' @importFrom MASS ginv
 #' @return A list containing DIVAS integration results. Most important ones include
 #'   \describe{
@@ -57,7 +57,7 @@ DIVASmain <- function(
     categorical_datablock = NULL, categorical_rank = NULL,
     categorical_method = c("fixed_rank", "nuclear_cv"),
     categorical_cv_folds = 5L, categorical_lambda_grid = NULL,
-    categorical_cull = TRUE, continuous_datablock = NULL
+    categorical_cull = FALSE, continuous_datablock = NULL
   ){
   if (!is.null(continuous_datablock)) {
     if (!is.null(datablock)) {

@@ -1,5 +1,14 @@
 # DIVAS: Data Integration via Analysis of Subspaces
 
+## Editing the software
+
+The active R package is in `pkg/`. CI and the hub analysis scripts load this
+package, so make implementation changes in `pkg/R/`. The duplicate top-level
+`R/` directory has been removed to keep a single implementation.
+
+For local development, run `devtools::load_all("pkg")` from this directory.
+An installed package must be reinstalled to pick up source changes.
+
 <!-- badges: start -->
 [![R-CMD-check](https://github.com/ByronSyun/DIVAS_Develop/workflows/R-CMD-check/badge.svg)](https://github.com/ByronSyun/DIVAS_Develop/actions)
 <!-- badges: end -->

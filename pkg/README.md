@@ -76,11 +76,19 @@ categorical block. It holds out complete subject-by-variable responses, fits a
 nuclear-norm-penalized MCA matrix on the remaining responses, and chooses the
 penalty with the lowest held-out squared error in MCA coordinates. The full
 categorical block is then refit by soft-thresholding its singular values.
-The default starts from an initial categorical rank (set with
-`categorical_rank`) and then applies DIVAS's original random-angle culling
-rule to the multinomial bootstrap angles. The retained rank and cutoffs are
-in `result$Phase1_categorical$rankDiagnostics`. Set
-`categorical_cull = FALSE` only to reproduce a fixed-rank analysis.
+The default retains the initial categorical rank (set with
+`categorical_rank`, defaulting to at most five) and uses multinomial
+parametric bootstrap samples to estimate angle bounds. Set
+`categorical_cull = TRUE` to apply angle culling explicitly. The reference
+distribution uses categorical datasets simulated under
+`theta = mu`: softmax of the category intercepts gives the observed proportions,
+One null draw is centered/scaled as MCA and supplies fixed rank-r reference
+subspaces. Each of 1,000 further independent null draws supplies a leading
+direction. The fifth percentile of its angles to the fixed subspace sets the
+reference in both sample and category spaces. The simulated angles
+are in `result$Phase1_categorical$nullAngleCaches`.
+The retained rank and cutoffs are in
+`result$Phase1_categorical$rankDiagnostics`.
 Bootstrap MCA uses empirical category proportions without an added count.
 If a level is absent in a simulated draw, its row is zero in the common
 category space. Nuclear cross-validation likewise omits levels absent from

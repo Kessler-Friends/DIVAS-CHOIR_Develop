@@ -13,10 +13,11 @@
 #'   generator.
 #' @param fixed_rank Optional. A positive integer, or one positive integer per
 #'   categorical block, specifying the initial categorical signal rank before
-#'   the original DIVAS random-angle culling step.
+#'   any optional null-angle culling step.
 #' @param lambda Optional positive nuclear-norm penalty, one per block or a
 #'   shared value. Singular values are soft-thresholded by this value.
-#' @param cull_rank Apply the original DIVAS random-angle rank culling rule.
+#' @param cull_rank Apply rank culling using simulated categorical null angles.
+#'   Defaults to FALSE, retaining all initial signal directions.
 #'
 #' @return A list containing:
 #'   \describe{
@@ -32,54 +33,69 @@
 #'     \item{VVHatCacheBars}{List of empty bootstrap cache placeholders.}
 #'     \item{UUHatCacheBars}{List of empty bootstrap cache placeholders.}
 #'     \item{rankDiagnostics}{Per-block bootstrap angle quantiles and culling cutoffs.}
+#'     \item{nullAngleCaches}{Per-block sample-space and category-space angles
+#'       from 1,000 null MCA leading directions to one fixed rank-r subspace
+#'       estimated from an independent null draw under theta = mu.}
 #'   }
 #'
 #' @export
 DIVASCHOIRSignalExtract <- function(
     datablock, nsim = 400,
     iplot = FALSE, cull = 0.382, seed = NULL, fixed_rank = NULL,
-    lambda = NULL, cull_rank = TRUE
+    lambda = NULL, cull_rank = FALSE
 ) {
 
   if (!is.null(seed)) {
     set.seed(seed)
   }
 
-  softmax_stable <- function(x) {
-    x <- x - max(x)
-    exp_x <- exp(x)
-    exp_x / sum(exp_x)
-  }
-
-  simulate_mca_multinomial <- function(theta_hat, p_hat, variable_levels) {
-    n <- ncol(theta_hat)
-    sim_block <- vector("list", length(variable_levels))
-    names(sim_block) <- vapply(variable_levels, `[[`, character(1), "variable")
-
-    for (variable in variable_levels) {
+  fitted_category_probs <- function(signal_hat, p_hat, variable_levels) {
+    lapply(variable_levels, function(variable) {
       rows <- variable$rows
       levels <- variable$levels
-      row_idx <- match(rows, rownames(theta_hat))
+      row_idx <- match(rows, rownames(signal_hat))
       if (anyNA(row_idx)) {
         stop("Could not match categorical levels back to MCA rows for variable ", variable$variable, ".")
       }
 
       p_variable <- p_hat[row_idx]
       mu_clr <- log(p_variable) - mean(log(p_variable))
-      eta <- mca_natural_back_map(p_variable) %*%
-        theta_hat[row_idx, , drop = FALSE]
+      # Map the fitted MCA signal back to natural coordinates once.
+      covariance <- diag(p_variable) - tcrossprod(p_variable)
+      eig <- eigen(covariance, symmetric = TRUE)
+      cutoff <- max(eig$values) * 1e-10
+      inverse_sqrt <- ifelse(eig$values > cutoff,
+                             1 / sqrt(pmax(eig$values, cutoff)), 0)
+      back_map <- (eig$vectors * rep(inverse_sqrt, each = length(p_variable))) %*%
+        t(eig$vectors)
+      eta <- back_map %*% signal_hat[row_idx, , drop = FALSE]
       eta <- sweep(eta, 2L, colMeans(eta), "-")
+      vapply(seq_len(ncol(signal_hat)), function(sample_idx) {
+        logits <- mu_clr + eta[, sample_idx]
+        exp_logits <- exp(logits - max(logits))
+        exp_logits / sum(exp_logits)
+      }, numeric(length(levels)))
+    })
+  }
+
+  simulate_mca_multinomial <- function(probabilities, variable_levels, sample_ids) {
+    n <- ncol(probabilities[[1L]])
+    sim_block <- vector("list", length(variable_levels))
+    names(sim_block) <- vapply(variable_levels, `[[`, character(1), "variable")
+
+    for (j in seq_along(variable_levels)) {
+      variable <- variable_levels[[j]]
+      levels <- variable$levels
       sampled <- character(n)
       for (sample_idx in seq_len(n)) {
-        logits <- mu_clr + eta[, sample_idx]
-        probs <- softmax_stable(logits)
-        sampled[sample_idx] <- sample(levels, size = 1L, prob = probs)
+        sampled[sample_idx] <- sample(levels, size = 1L,
+                                      prob = probabilities[[j]][, sample_idx])
       }
       sim_block[[variable$variable]] <- factor(sampled, levels = levels)
     }
 
     sim_block <- as.data.frame(sim_block, stringsAsFactors = TRUE)
-    rownames(sim_block) <- colnames(theta_hat)
+    rownames(sim_block) <- sample_ids
     MatCenterDIVASCHOIR(sim_block, allow_empty_levels = TRUE)
   }
 
@@ -125,6 +141,7 @@ DIVASCHOIRSignalExtract <- function(
   VVHatCacheBars <- vector("list", nb) # cached VVHat matrices for bootstrap samples
   UUHatCacheBars <- vector("list", nb) # cached UUHat matrices for bootstrap samples
   rankDiagnostics <- vector("list", nb)
+  nullAngleCaches <- vector("list", nb)
 
   # Loop through each block
   for (ib in seq_len(nb)) {
@@ -170,22 +187,51 @@ DIVASCHOIRSignalExtract <- function(
     EHat <- datablockc - signal_hat
     singValsTilde <- d_hat
 
-    randAngleCache <- randDirAngleMJ(n, rHat, 1000)
-    randAngleCacheLoad <- randDirAngleMJ(d, rHat, 1000)
+    # Under theta = mu, every sample has the same category probabilities.
+    # A zero MCA signal leaves only mu_clr in the softmax logits.
+    null_signal <- matrix(0, d, n, dimnames = dimnames(datablockc))
+    probabilities_null <- fitted_category_probs(null_signal, p_hat, variable_levels)
+    randAngleCache <- numeric(1000L)
+    randAngleCacheLoad <- numeric(1000L)
+    # Estimate the reference subspaces once and hold them fixed, as in
+    # randDirAngleMJ. Categorical null fits supply the random directions.
+    null_reference <- svd(simulate_mca_multinomial(
+      probabilities_null, variable_levels, colnames(datablockc)
+    ), nu = rHat, nv = rHat)
+    cat("Simulating 1,000 categorical null directions against fixed subspaces (theta = mu).\n")
+    for (s in seq_along(randAngleCache)) {
+      null_fit1 <- svd(simulate_mca_multinomial(
+        probabilities_null, variable_levels, colnames(datablockc)
+      ), nu = 1L, nv = 1L)
+      # Angle from each leading unit direction to the fixed rank-r subspace:
+      # acos of the orthogonal projection length.
+      randAngleCache[s] <- acosd(sqrt(sum(
+        crossprod(null_reference$v, null_fit1$v)^2
+      )))
+      randAngleCacheLoad[s] <- acosd(sqrt(sum(
+        crossprod(null_reference$u, null_fit1$u)^2
+      )))
+    }
+    nullAngleCaches[[ib]] <- list(subject = randAngleCache,
+                                 feature = randAngleCacheLoad)
     randAngle <- stats::quantile(randAngleCache, 0.05)
     randAngleLoad <- stats::quantile(randAngleCacheLoad, 0.05)
 
     rSteps[[ib]] <- rHat
 
-    # Bootstrap estimation for perturbation-angle bounds and DIVAS rank culling.
+    # Categorical parametric bootstrap for perturbation-angle bounds.
+    # Retain the initial rank unless culling is explicitly requested.
     PCAnglesCacheFullBoot <- matrix(90, nsim, rHat)
     PCAnglesCacheFullBootLoad <- matrix(90, nsim, rHat)
 
     cat("Progress Through Bootstrapped Matrices:\n")
     cat(paste0("\n", strrep(".", nsim), "\n\n"))
 
+    # The fitted probabilities are fixed; only categorical draws vary.
+    probabilities_hat <- fitted_category_probs(signal_hat, p_hat, variable_levels)
     for (s in seq_len(nsim)) {
-      randX <- simulate_mca_multinomial(signal_hat, p_hat, variable_levels)
+      randX <- simulate_mca_multinomial(probabilities_hat, variable_levels,
+                                       colnames(datablockc))
       randU <- U_hat
       randV <- V_hat
       svdRand <- svd(randX)
@@ -230,13 +276,18 @@ DIVASCHOIRSignalExtract <- function(
     VVHatCacheBar <- vector("list", nsim)
     UUHatCacheBar <- vector("list", nsim)
     singValsTildeBar <- singValsTilde[retained]
-    for (s in seq_len(nsim)) {
-      theta_bar <- U_hat[, retained, drop = FALSE] %*%
+    probabilities_bar <- probabilities_hat
+    if (rBar < rHat) {
+      signal_bar <- U_hat[, retained, drop = FALSE] %*%
         diag(singValsTildeBar, nrow = length(singValsTildeBar)) %*%
         t(V_hat[, retained, drop = FALSE])
-      rownames(theta_bar) <- rownames(datablockc)
-      colnames(theta_bar) <- colnames(datablockc)
-      randX <- simulate_mca_multinomial(theta_bar, p_hat, variable_levels)
+      rownames(signal_bar) <- rownames(datablockc)
+      colnames(signal_bar) <- colnames(datablockc)
+      probabilities_bar <- fitted_category_probs(signal_bar, p_hat, variable_levels)
+    }
+    for (s in seq_len(nsim)) {
+      randX <- simulate_mca_multinomial(probabilities_bar, variable_levels,
+                                       colnames(datablockc))
       randU <- U_hat[, retained, drop = FALSE]
       randV <- V_hat[, retained, drop = FALSE]
       svdRand <- svd(randX)
@@ -287,6 +338,7 @@ DIVASCHOIRSignalExtract <- function(
     rSteps = rSteps,
     VVHatCacheBars = VVHatCacheBars,
     UUHatCacheBars = UUHatCacheBars,
-    rankDiagnostics = rankDiagnostics
+    rankDiagnostics = rankDiagnostics,
+    nullAngleCaches = nullAngleCaches
   ))
 }
