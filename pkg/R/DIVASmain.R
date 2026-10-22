@@ -14,12 +14,20 @@
 #'
 #' @param continuous_datablock Optional alias for datablock, for calls using the categorical interface.
 #' @param categorical_datablock A list of categorical matrices or data.frames. Data.frames have samples as rows and categorical variables as columns; matrices have categories as rows and samples as columns.
-#' @param categorical_rank Optional initial rank for categorical blocks. The
-#'   initial directions are retained unless categorical culling is enabled.
-#' @param categorical_method `"fixed_rank"` (default) or `"nuclear_cv"`. The latter selects a nuclear-norm penalty by cross-validation of held-out categorical responses.
-#' @param categorical_cv_folds Number of folds for categorical nuclear-norm cross-validation.
-#' @param categorical_lambda_grid Optional positive penalty values to consider. By default, ten values are generated from the MCA singular spectrum.
+#' @param categorical_rank Optional latent signal rank. Nuclear fits retain this many
+#'   leading singular components after selecting lambda by five-fold response CV.
 #' @param categorical_cull Apply rank culling using simulated categorical null angles. Defaults to FALSE, retaining the initial categorical rank.
+#' @param categorical_method Either mca or nuclear_norm. Nuclear norm selects
+#'   lambda by five-fold response CV, fixing lambda and truncating to the requested rank in refits.
+#' @param categorical_lambda_grid Optional finite nonnegative nuclear penalties
+#'   to score by five-fold response CV. NULL uses factors 1.05, 0.75, 0.45, 0.25, and 0.1 times
+#'   the intercept-only score spectral norm. Ignored for MCA.
+#' @param categorical_simulate_null Compute categorical null diagnostics; required for culling.
+#' @param categorical_bootstrap_tol Nuclear refit tolerance; original/CV fits retain 1e-7.
+#' @param categorical_null_nsim Number of categorical null simulations (default 1000),
+#'   separate from nsim bootstrap samples.
+#' @param categorical_cull_fraction Multiplier of the categorical null-angle bound,
+#'   in (0, 0.5]. Defaults to 0.5 for categorical blocks.
 #' @importFrom MASS ginv
 #' @return A list containing DIVAS integration results. Most important ones include
 #'   \describe{
@@ -36,6 +44,11 @@
 #'   See Details for more explanations.
 #'
 #' @details
+#' Categorical reconstruction fits unpenalized multinomial likelihood on all fixed
+#' retained score directions. Categorical Loadings are category coefficients, and
+#' scoresList contains fixed centered scores. categoricalReconstruction includes
+#' intercepts, component logits, probabilities, residuals and solver diagnostics.
+#' Continuous blocks retain least-squares reconstruction and inverse loadings.
 #' DIVASmain returns a list containing all important information returned from the DIVAS algorithm.
 #' For users, the most important ones are scores (matBlocks), loadings (matLoadings) and an index
 #' book (keyIdxMap) explaining what joint structures each score or loading matrix correpsond to.
@@ -55,10 +68,18 @@ DIVASmain <- function(
     datablock = NULL, nsim = 400, iprint = TRUE, colCent = FALSE, rowCent = FALSE,
     figdir = NULL, seed = NULL, ReturnDetail = FALSE,
     categorical_datablock = NULL, categorical_rank = NULL,
-    categorical_method = c("fixed_rank", "nuclear_cv"),
-    categorical_cv_folds = 5L, categorical_lambda_grid = NULL,
-    categorical_cull = FALSE, continuous_datablock = NULL
+    categorical_cull = FALSE, continuous_datablock = NULL,
+    categorical_method = c("mca", "nuclear_norm"), categorical_lambda_grid = NULL,
+    categorical_simulate_null = TRUE, categorical_bootstrap_tol = 1e-7,
+    categorical_null_nsim = 1000L,
+    categorical_cull_fraction = 0.5
   ){
+  categorical_method <- match.arg(categorical_method)
+  if (!is.numeric(categorical_cull_fraction) || length(categorical_cull_fraction) != 1L ||
+      !is.finite(categorical_cull_fraction) || categorical_cull_fraction <= 0 ||
+      categorical_cull_fraction > 0.5) {
+    stop("categorical_cull_fraction must be a number in (0, 0.5].")
+  }
   if (!is.null(continuous_datablock)) {
     if (!is.null(datablock)) {
       stop("Supply only one of `datablock` and `continuous_datablock`.")
@@ -67,11 +88,6 @@ DIVASmain <- function(
   }
   datablock <- if (is.null(datablock)) list() else datablock
   categorical_datablock <- if (is.null(categorical_datablock)) list() else categorical_datablock
-  categorical_method <- match.arg(categorical_method)
-  if (categorical_method == "nuclear_cv" && !is.null(categorical_rank)) {
-    stop("`categorical_rank` cannot be combined with `categorical_method = 'nuclear_cv'`.")
-  }
-
   # Initialize parameters
   nb <- length(datablock)
   dataname <- names(datablock)
@@ -112,20 +128,13 @@ DIVASmain <- function(
     datablock[[ib]] <- MatCenterJP(datablock[[ib]], colCent, rowCent)
   }
 
-  categorical_rowSpaces <- vector("list", categorical_nb)
-  categorical_cv <- vector("list", categorical_nb)
-  categorical_lambda <- rep(NA_real_, categorical_nb)
-  for (ib in seq_len(categorical_nb)) {
-    categorical_rowSpaces[[ib]] <- 0
-    if (categorical_method == "nuclear_cv") {
-      categorical_cv[[ib]] <- categorical_nuclear_cv(
-        categorical_datablock[[ib]], folds = categorical_cv_folds,
-        lambda_grid = categorical_lambda_grid,
-        seed = if (is.null(seed)) NULL else seed + ib - 1L
-      )
-      categorical_lambda[ib] <- categorical_cv[[ib]]$lambda
-    }
-    categorical_datablock[[ib]] <- MatCenterDIVASCHOIR(categorical_datablock[[ib]])
+  categorical_responses <- categorical_datablock
+
+  # Prepare observed categorical blocks alongside the continuous blocks above.
+  # Bootstrap draws are still prepared within categorical signal extraction.
+  if (categorical_nb > 0) {
+    categorical_datablock <- lapply(categorical_datablock, function(block)
+      MatCenterDIVASCHOIR(block, method = categorical_method))
   }
 
   # Step 1: Estimate signal space and perturbation angle
@@ -149,12 +158,16 @@ DIVASmain <- function(
       datablock = categorical_datablock,
       nsim = nsim,
       iplot = FALSE,
-      cull = filterPerc,
+      cull = categorical_cull_fraction,
       seed = seed,
       fixed_rank = categorical_rank,
-      lambda = if (categorical_method == "nuclear_cv") categorical_lambda else NULL,
-      cull_rank = categorical_cull
+      cull_rank = categorical_cull,
+      method = categorical_method,
+      lambda_grid = categorical_lambda_grid,
+      simulate_null = categorical_simulate_null, bootstrap_tol = categorical_bootstrap_tol,
+      null_nsim = categorical_null_nsim
     )
+    categorical_datablock <- Phase1_categorical$preparedBlocks
   } else {
     Phase1_categorical <- list(
       VBars = list(), UBars = list(), phiBars = numeric(), psiBars = numeric(),
@@ -179,7 +192,8 @@ DIVASmain <- function(
 
   # Continue the original DIVAS pipeline with both types of signal spaces.
   continuous_nb <- nb
-  datablock <- c(datablock, categorical_datablock)
+  categorical_analysis <- if (categorical_nb > 0) Phase1_categorical$analysisBlocks else list()
+  datablock <- c(datablock, categorical_analysis)
   dataname <- c(dataname, categorical_dataname)
   nb <- length(datablock)
   n <- ncol(datablock[[1]]) # Get number of samples
@@ -210,7 +224,8 @@ DIVASmain <- function(
   # Step 3: Reconstruct DJIVE decomposition
   outstruct <- DJIVEReconstructMJ(
     datablock = datablock, dataname =  dataname, outMap =  Phase2$outMap,
-    keyIdxMap =  Phase2$keyIdxMap, jointBlockOrder =  Phase2$jointBlockOrder, doubleCenter =  0
+    keyIdxMap =  Phase2$keyIdxMap, jointBlockOrder =  Phase2$jointBlockOrder, doubleCenter =  0,
+    categorical_blocks = c(rep(list(NULL), continuous_nb), categorical_responses)
   )
 
   outstruct$rBars <- Phase1$rBars
@@ -223,8 +238,6 @@ DIVASmain <- function(
   outstruct$Phase1_continuous <- Phase1_continuous
   outstruct$Phase1_categorical <- Phase1_categorical
   outstruct$categorical_method <- categorical_method
-  outstruct$categorical_lambda <- if (categorical_method == "nuclear_cv") categorical_lambda else NULL
-  outstruct$categorical_cv <- if (categorical_method == "nuclear_cv") categorical_cv else NULL
   outstruct$Phase1_combined <- Phase1
   outstruct$jointBasisMapRaw <- Phase2$outMap
 
@@ -248,7 +261,7 @@ DIVASmain <- function(
   outstruct$categorical_datablock <- categorical_datablock
   outstruct$categorical_dataname <- categorical_dataname
 
-  diagnostic_plots <- tryCatch(
+  diagnostic_plots <- if (any(Phase1$rBars > 0)) tryCatch(
     DJIVEAngleDiagnosticJP(
       datablock = datablock,
       dataname = dataname,
@@ -260,7 +273,7 @@ DIVASmain <- function(
       warning("Failed to generate DIVAS diagnostic plots: ", conditionMessage(e))
       NULL
     }
-  )
+  ) else NULL
 
   outstruct$diagnostic_plots <- diagnostic_plots
   if (!is.null(diagnostic_plots) && !is.null(figdir)) {
@@ -496,6 +509,24 @@ DIVASmain <- function(
       cat("Processing block", block_idx, ":", dataname[block_idx], "...\n")
     }
 
+    # Categorical coefficients map fixed scores to logits; do not invert them.
+    if (block_idx > continuous_nb) {
+      reconstruction <- outstruct$categoricalReconstruction[[block_idx]]
+      maps <- reconstruction$matLoadingMap
+      component_names <- unlist(lapply(names(maps), function(key)
+        paste0(outstruct$keymapname[[key]], "-", seq_len(ncol(maps[[key]])))))
+      coefficients <- if (length(maps)) do.call(cbind, maps) else
+        matrix(0, nrow(reconstruction$eta), 0L)
+      dimnames(coefficients) <- list(rownames(reconstruction$eta), component_names)
+      fixed_scores <- reconstruction$basis
+      dimnames(fixed_scores) <- list(sample_ids, component_names)
+      outstruct$Loadings[[block_idx]] <- coefficients
+      outstruct$scoresList[[block_idx]] <- fixed_scores
+      outstruct$LoadingsNames[[block_idx]] <- component_names
+      outstruct$names_vec[[block_idx]] <- component_names
+      next
+    }
+
     # MASS is imported, so we can use it directly
 
     # Use computLoadings function
@@ -563,6 +594,7 @@ DIVASmain <- function(
       Loadings = outstruct$Loadings,         # third: keep Loadings as matrix format
       LoadingsNames = outstruct$LoadingsNames # fourth: keep LoadingsNames (remove names_vec)
     )
+    if (categorical_nb > 0L) compact$categoricalReconstruction <- outstruct$categoricalReconstruction
     return(compact)
   } else {
     # Full details with updated naming and priority order

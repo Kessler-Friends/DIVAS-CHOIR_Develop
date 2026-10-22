@@ -10,7 +10,8 @@ DJIVEReconstructMJ(
   outMap,
   keyIdxMap,
   jointBlockOrder,
-  doubleCenter
+  doubleCenter,
+  categorical_blocks = NULL
 )
 }
 \arguments{
@@ -24,10 +25,12 @@ DJIVEReconstructMJ(
 
 \item{jointBlockOrder}{Vector to record the joint block order.}
 
-\item{doubleCenter}{Flag indicating whether to perform double centering.}
+\item{doubleCenter}{Flag indicating whether to perform double centering of continuous blocks.}
+
+\item{categorical_blocks}{Optional list aligned with datablock: raw or tagged observed categorical data for categorical entries, NULL for continuous entries. Categorical loadings are fitted jointly by fixed-score multinomial likelihood.}
 }
 \value{
-A list containing the joint basis map, loadings, and joint blocks.
+A list containing the joint basis map, loadings, joint blocks, and categoricalReconstruction with intercepts, additive logit components, probabilities, residuals, fixed centered scores and fit diagnostics.
 }
 \description{
 This function reconstructs joint blocks from the provided data matrices

@@ -56,11 +56,16 @@ MatReconstructMJ <- function(X, matJointV, matJointOrder, matJointRanks) {
 #' @param keyIdxMap List mapping between joint block index and data blocks.
 #' @param jointBlockOrder Vector to record the joint block order.
 #' @param doubleCenter Flag indicating whether to perform double centering.
+#' @param categorical_blocks Optional list aligned with datablock; entries are
+#'   observed categorical blocks (raw or tagged), with NULL for continuous blocks.
 #'
 #' @return A list containing the joint basis map, loadings, and joint blocks.
 #' @export
-DJIVEReconstructMJ <- function(datablock, dataname, outMap, keyIdxMap, jointBlockOrder, doubleCenter) {
+DJIVEReconstructMJ <- function(datablock, dataname, outMap, keyIdxMap, jointBlockOrder, doubleCenter, categorical_blocks = NULL) {
   nb <- length(datablock)
+  if (is.null(categorical_blocks)) categorical_blocks <- rep(list(NULL), nb)
+  if (length(categorical_blocks) != nb) stop("categorical_blocks must align with datablock.")
+  categoricalReconstruction <- setNames(vector("list", nb), dataname)
   matJointV <- vector("list", nb)
   matJointOrder <- vector("list", nb)
   matJointRanks <- vector("list", nb)
@@ -92,7 +97,11 @@ DJIVEReconstructMJ <- function(datablock, dataname, outMap, keyIdxMap, jointBloc
       jointSpaceProj <- jointSpace %*% t(jointSpace)
       jointDim <- ncol(jointSpace)
       dataStack <- do.call(rbind, datablock[blockIn])
-      commonNormalizedBasisMap[[idxStr]] <- svds(dataStack %*% jointSpaceProj, jointDim)$v
+      projected <- dataStack %*% jointSpaceProj
+      commonNormalizedBasisMap[[idxStr]] <- if (min(dim(projected)) < 3L ||
+                                               jointDim >= min(dim(projected))) {
+        svd(projected, nu = 0L, nv = jointDim)$v
+      } else svds(projected, jointDim)$v
     }
   }
   outMapRaw <- outMap
@@ -123,13 +132,19 @@ DJIVEReconstructMJ <- function(datablock, dataname, outMap, keyIdxMap, jointBloc
   matBlocks <- vector("list", nb)
   for (ib in seq_len(nb)) {
     datablockc <- datablock[[ib]]
-    if (doubleCenter == 1) {
+    if (doubleCenter == 1 && is.null(categorical_blocks[[ib]])) {
       bsize <- dim(datablock[[ib]])
       d <- bsize[1]
       n <- bsize[2]
       datablockc <- datablock[[ib]] - rowMeans(datablock[[ib]]) - matrix(colMeans(datablock[[ib]]), nrow = d, ncol = n, byrow = TRUE) + mean(datablock[[ib]])
     }
-    res <- MatReconstructMJ(datablockc, matJointV[[ib]], matJointOrder[[ib]], matJointRanks[[ib]])
+    res <- if (is.null(categorical_blocks[[ib]])) {
+      MatReconstructMJ(datablockc, matJointV[[ib]], matJointOrder[[ib]], matJointRanks[[ib]])
+    } else {
+      choir_reconstruct(categorical_blocks[[ib]], matJointV[[ib]],
+                        matJointOrder[[ib]], matJointRanks[[ib]])
+    }
+    if (!is.null(categorical_blocks[[ib]])) categoricalReconstruction[[ib]] <- res
     matBlocks[[ib]] <- res$matBlockMap
     matLoadings[[ib]] <- res$matLoadingMap
   }
@@ -139,7 +154,8 @@ DJIVEReconstructMJ <- function(datablock, dataname, outMap, keyIdxMap, jointBloc
     jointBasisMap = outMap,
     matLoadings = matLoadings,
     matBlocks = matBlocks,
-    keyIdxMap = keyIdxMap
+    keyIdxMap = keyIdxMap,
+    categoricalReconstruction = categoricalReconstruction
   )
   return(outstruct)
 }

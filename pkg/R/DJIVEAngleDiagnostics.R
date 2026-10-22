@@ -6,6 +6,18 @@ takeNormOfEachColumnJP <- function(inmat) {
   return(outmat)
 }
 
+# Loading diagnostics must describe the retained space, rather than containment
+# in the larger space used for rank culling. Zero-padded missing directions give
+# a 90-degree angle. A saturated categorical null reference is uninformative.
+choir_loading_diagnostic_bounds <- function(crossproducts, null_bound) {
+  angles <- vapply(crossproducts, function(x) {
+    cosine <- min(svd(x, nu = 0L, nv = 0L)$d)
+    acos(pmin(1, pmax(0, cosine))) * 180 / pi
+  }, numeric(1))
+  list(perturbation = unname(stats::quantile(angles, 0.95)),
+       random = if (is.finite(null_bound) && null_bound > 1e-5) null_bound else NA_real_)
+}
+
 
 #' Calculate Random Direction Angles
 #'
@@ -95,6 +107,12 @@ DJIVEAngleDiagnosticJP <- function(
       reference <- categorical_diagnostics[[categorical_index]]
       randAngleTraits[ib] <- reference$subject_random_deg[1L]
       randAngleObjects[ib] <- reference$feature_random_deg[1L]
+      if (length(UUHatCacheBars[[ib]])) {
+        bounds <- choir_loading_diagnostic_bounds(UUHatCacheBars[[ib]],
+                                                  randAngleObjects[ib])
+        psiBars[ib] <- bounds$perturbation
+        randAngleObjects[ib] <- bounds$random
+      }
     } else {
       randAngleCache <- randDirAngleMJ(n, rBars[ib], 1000)
       randAngleCacheLoad <- randDirAngleMJ(ds[ib], rBars[ib], 1000)
@@ -197,6 +215,16 @@ DJIVEAngleDiagnosticJP <- function(
     runStart <- runStart + 1 + choose(nb, b - 1) #same
   }
   runEnds <- runEnds[1:nb]
+  # Label the last displayed subset in each sharing group, even when the
+  # final possible subset has rank zero and is absent from outMap.
+  labelEnds <- integer(0)
+  groupStart <- 1L
+  for (groupEnd in runEnds) {
+    candidates <- seq.int(groupStart, groupEnd)
+    displayed <- candidates[as.character(szInd[candidates]) %in% names(outMap)]
+    if (length(displayed)) labelEnds <- c(labelEnds, tail(displayed, 1L))
+    groupStart <- groupEnd + 1L
+  }
 
   ncrs <- numeric(nb)
   midpts <- numeric(nb)
@@ -529,7 +557,7 @@ DJIVEAngleDiagnosticJP <- function(
     if (k_s %in% names(outMap)) {
       ddExtend <- 0.5
 
-      if (k %in% runEnds) {
+      if (k %in% labelEnds) {
         for (b in 1:nb) {
           plot_score <- plot_score +
             ggplot2::annotate("text",
@@ -631,7 +659,7 @@ DJIVEAngleDiagnosticJP <- function(
               color = "black"
             )
         }
-        if (k %in% runEnds) {
+        if (k %in% labelEnds) {
           plot_score <- plot_score +
             ggplot2::annotate("text",
                               x = k_p + 0.85,
@@ -663,7 +691,7 @@ DJIVEAngleDiagnosticJP <- function(
             )
         }
 
-        if (k %in% runEnds) {
+        if (k %in% labelEnds) {
           plot_score <- plot_score +
             ggplot2::annotate("text",
                               x = k_p + 0.85,
@@ -773,7 +801,7 @@ DJIVEAngleDiagnosticJP <- function(
       ddExtend <- 0.5
 
       # move degree slight right
-      if (k %in% runEnds) {
+      if (k %in% labelEnds) {
         for (b in 1:nb) {
           plot_loading <- plot_loading +
             ggplot2::annotate("text",
@@ -784,8 +812,8 @@ DJIVEAngleDiagnosticJP <- function(
                               color = "black") +
             ggplot2::annotate("text",
                               x = k_p + 1.05,
-                              y = -randAngleObjects[b]/90 + b + 0.5,
-                              label = paste0(round(randAngleObjects[b], 1), "."),
+                              y = if (is.finite(randAngleObjects[b])) -randAngleObjects[b]/90 + b + 0.5 else b + 0.45,
+                              label = if (is.finite(randAngleObjects[b])) paste0(round(randAngleObjects[b], 1), ".") else "n/a",
                               size = fontsize/10,
                               color = "black")
         }
@@ -848,8 +876,8 @@ DJIVEAngleDiagnosticJP <- function(
                 aes(x = x, y = y),
                 linetype = "dashed",
                 color = "black"
-              ) +
-              geom_line(
+              )
+            if (is.finite(randAngleObjects[b])) plot_loading <- plot_loading + geom_line(
                 data = data.frame(
                   x = c(k_p - 0.5, k_p + ddExtend),
                   y = -rep(randAngleObjects[b], 2)/90 + b + 0.5
@@ -863,7 +891,7 @@ DJIVEAngleDiagnosticJP <- function(
       }
 
       # % move to slightly right
-      if (k %in% runEnds) {
+      if (k %in% labelEnds) {
         plot_loading <- plot_loading +
           ggplot2::annotate("text",
                             x = k_p + 0.85,
@@ -929,7 +957,7 @@ DJIVEAngleDiagnosticJP <- function(
           linetype = "dashed",
           color = "black"
         )
-      if (k %in% runEnds) {
+      if (k %in% labelEnds) {
         plot_loading <- plot_loading +
           ggplot2::annotate("text",
                             x = k_p + 0.85,

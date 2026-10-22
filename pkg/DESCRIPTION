@@ -14,7 +14,7 @@ Description: Based on 'Data integration via analysis of subspaces (DIVAS)' by Pr
 License: AGPL (>= 3)
 Encoding: UTF-8
 Imports: 
-    CVXR (>= 1.0-15),
+    CVXR (>= 1.8.2),
     RSpectra,
     methods,
     ggplot2,

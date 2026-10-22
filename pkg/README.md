@@ -18,18 +18,15 @@ We provide an R implementation of DIVAS (Prothero et al., 2024), a statistical m
 
 ### Dependencies
 
-The DIVAS package requires the current 1.x line of the `CVXR` package for compatibility with the SCS solver interface. The package has been tested with `CVXR` 1.0-15. In `DESCRIPTION`, DIVAS also declares `CVXR (>= 1.0-15)` as a package dependency.
+DIVAS requires `CVXR (>= 1.8.2)`. Nuclear multinomial fits use its declarative
+objective and constraints with the Clarabel solver.
 
 ```R
 # Install devtools (if not already installed)
 install.packages("devtools")
 
-# Install CVXR 1.x. DIVAS has been tested with CVXR 1.0-15.
-install.packages("remotes")
-remotes::install_version("CVXR", version = "1.0-15", repos = "https://cloud.r-project.org")
-
-# Alternatively, install the latest CRAN release if it is compatible with your R version.
-# install.packages("CVXR")
+# Install CVXR 1.8.2 or newer.
+install.packages("CVXR")
 ```
 
 ### Installing the DIVAS package
@@ -69,48 +66,71 @@ print(plots)
 
 For more detailed tutorials, see the documentation website and linked case studies below.
 
-### Categorical nuclear-norm rank selection
+### Choosing the CHOIR estimator
 
-The optional `nuclear_cv` method selects a penalty separately for each
-categorical block. It holds out complete subject-by-variable responses, fits a
-nuclear-norm-penalized MCA matrix on the remaining responses, and chooses the
-penalty with the lowest held-out squared error in MCA coordinates. The full
-categorical block is then refit by soft-thresholding its singular values.
-The default retains the initial categorical rank (set with
-`categorical_rank`, defaulting to at most five) and uses multinomial
-parametric bootstrap samples to estimate angle bounds. Set
-`categorical_cull = TRUE` to apply angle culling explicitly. The reference
-distribution uses categorical datasets simulated under
-`theta = mu`: softmax of the category intercepts gives the observed proportions,
-One null draw is centered/scaled as MCA and supplies fixed rank-r reference
-subspaces. Each of 1,000 further independent null draws supplies a leading
-direction. The fifth percentile of its angles to the fixed subspace sets the
-reference in both sample and category spaces. The simulated angles
-are in `result$Phase1_categorical$nullAngleCaches`.
-The retained rank and cutoffs are in
-`result$Phase1_categorical$rankDiagnostics`.
-Bootstrap MCA uses empirical category proportions without an added count.
-If a level is absent in a simulated draw, its row is zero in the common
-category space. Nuclear cross-validation likewise omits levels absent from
-a training fold when computing that fold's validation error.
+`DIVASmain()` accepts raw categorical data frames and passes
+`categorical_method = "mca"` (the default) or `"nuclear_norm"` to the CHOIR
+extractor. Continuous estimation is unchanged.
+
+`pkg/R/SignalExtractUtils.R` contains shared preparation in
+`MatCenterDIVASCHOIR()`, MCA preparation in `choir_prepare_mca()`, and nuclear
+setup and latent centering in `choir_prepare_nuclear()`.
+`pkg/R/DIVASCHOIREstimation.R` contains the MCA and nuclear estimators.
+`pkg/R/DIVASCHOIRSignalExtract.R` selects the method and handles observed fits,
+null simulations, bootstrap fits, angles and outputs.
+
+- MCA: one-hot encode, subtract empirical category proportions, and scale by
+  their square roots; estimate the signal with truncated SVD.
+- Nuclear: leave one-hot observations unchanged and initialize category groups,
+  the centered intercept and centered latent eta; fit multinomial likelihood
+  plus a nuclear-norm penalty on the latent signal. Center eta across subjects
+  and enforce within-variable sum-to-zero constraints during estimation.
+
+The extractor calls the same method for the observed fit, null reference fits,
+and both bootstrap stages, including rebuilding the correct input each time.
+Nuclear probabilities come directly from fitted intercept-plus-eta logits;
+the fit is expressed as multinomial negative log likelihood plus
+`lambda * CVXR::norm_nuc(eta)`, with linear centering constraints.
+there is no MCA back-map in that path. Downstream reconstruction uses the MCA
+matrix for MCA or the fitted latent eta for nuclear. Detailed results retain
+both prepared observations and the analysis matrices.
+
+Nuclear lambda selection uses five-fold response CV. Each held-out unit is one
+subject-variable outcome, with all its category indicators excluded together.
+Choose the lowest average held-out log loss, then fit that penalty on all data.
+`categorical_rank` applies only to MCA. Folds use a fixed seed (20261019), preserve
+the caller's random state, and retain training observations for each subject and
+variable. Warm starts follow decreasing penalties within each fold.
+
+`categorical_lambda_grid` supplies candidate nonnegative penalties. The default
+uses factors 1.05, 0.75, 0.45, 0.25, and 0.1 times the intercept-only score spectral
+norm. Thus the default searches a finite positive grid, including an intercept-only
+candidate, rather than optimizing over all nonnegative lambda. Selection needs
+five fits per candidate and one final full-data fit. A nonconverged fit stops
+the run so the iteration limit can be increased; ties favor
+the larger lambda. The score table is saved in `Phase1_categorical$estimation`.
+
+The chosen lambda stays fixed in null and bootstrap refits. Their ranks may vary.
+Absent bootstrap directions receive 90-degree bounds and zero projection-cache
+columns. Null fits with rank zero have NA angles, not arbitrary directions;
+diagnostics record actual ranks and valid draws. Optional null-angle culling
+stops if no valid calibration remains. An observed rank-zero fit returns empty
+spaces without running null simulations or bootstraps.
 
 ```R
 result <- DIVASmain(
-  continuous_datablock = list(RNA = rna_matrix),
-  categorical_datablock = list(clinical = clinical_data_frame),
-  categorical_method = "nuclear_cv",
-  categorical_cv_folds = 5,
-  seed = 42
+  continuous_datablock = continuous_blocks,
+  categorical_datablock = categorical_blocks,
+  categorical_method = "nuclear_norm",
+  categorical_lambda_grid = c(0.5, 1, 2, 4), # omit to use the default grid
+  categorical_cull = FALSE,
+  ReturnDetail = TRUE
 )
-result$categorical_lambda
-result$categorical_cv[[1]]$cv
 ```
 
-`clinical_data_frame` has one row per subject and one column per categorical
-variable. `rna_matrix` has features in rows and the same subjects in columns.
-The selected penalty is in the scale of the centered, weighted MCA matrix;
-the CV score is a reconstruction error, rather than multinomial likelihood.
-Use `categorical_lambda_grid` to supply candidate penalties explicitly.
+`Phase1_categorical$estimation` records method, rank, penalty and bootstrap
+metadata. Existing MCA preparation calls still work; a matrix prepared for one
+method cannot be reused as input to the other method. Pass raw data instead.
 
 ## Available Datasets
 
@@ -149,3 +169,29 @@ Su, Y., Chen, D., Yuan, D., et al. (2020). Multi-Omics Resolves a Sharp Disease-
 ## License
 
 This project is licensed under the GNU Affero General Public License v3.0 (AGPL-3) - see the LICENSE file for details.
+
+
+### Categorical reconstruction
+
+After joint directions are selected, `DJIVEReconstructMJ()` routes continuous
+blocks to the existing least-squares `MatReconstructMJ()` and categorical blocks
+to `choir_reconstruct()` in `R/DIVASCHOIRReconstruct.R`. This applies to both MCA
+and nuclear extraction. Reconstruction uses the original one-hot responses,
+not the standardized MCA matrix or a least-squares projection of estimated eta.
+
+For each categorical block, all retained joint, partially shared and individual
+score directions are fixed and fitted together. The multinomial likelihood
+estimates an unpenalized intercept and category coefficients. Scores are centered
+across subjects; category sums of intercepts and coefficients are constrained to
+zero for each variable. Components add in logit space; probabilities follow from
+softmax within each variable after adding the intercept. No new penalty or rank
+selection is performed. Solver failures stop explicitly; extreme logits warn of
+possible separation and the lack of a finite unpenalized optimum.
+
+`matLoadings` and categorical `Loadings` contain fitted category coefficients;
+`matBlocks` contain their additive latent effects. Categorical `scoresList` keeps
+the centered fixed score coordinates, without the continuous inverse-loading
+transformation. `categoricalReconstruction` (also included in compact results)
+provides `mu`, `eta`, `theta`, `probabilities`, `residual` (one-hot minus fitted
+probabilities), the centered `basis`, and likelihood/solver diagnostics. Historical
+saved fits keep their previous reconstruction until explicitly refitted.

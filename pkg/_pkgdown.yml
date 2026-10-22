@@ -77,7 +77,6 @@ reference:
     contents:
       - MatCenterJP
       - acosd
-      - getTopFeatures
 #  - title: "Main Functions" # This section is now replaced
 #    desc: >
 #      Core functions for DIVAS analysis

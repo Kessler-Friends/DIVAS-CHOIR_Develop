@@ -15,14 +15,21 @@ DIVASmain(
   ReturnDetail = FALSE,
   categorical_datablock = NULL,
   categorical_rank = NULL,
-  categorical_method = c("fixed_rank", "nuclear_cv"),
-  categorical_cv_folds = 5L,
-  categorical_lambda_grid = NULL,
   categorical_cull = FALSE,
-  continuous_datablock = NULL
+  continuous_datablock = NULL,
+  categorical_method = c("mca", "nuclear_norm"),
+  categorical_lambda_grid = NULL,
+  categorical_simulate_null = TRUE,
+  categorical_bootstrap_tol = 1e-7,
+  categorical_null_nsim = 1000L,
+  categorical_cull_fraction = 0.5
 )
 }
 \arguments{
+\item{categorical_cull_fraction}{Multiplier of the categorical null-angle bound, in (0, 0.5]. Defaults to 0.5 for categorical blocks.}
+\item{categorical_simulate_null}{Compute categorical null diagnostics; required for culling.}
+\item{categorical_bootstrap_tol}{Nuclear refit tolerance; original/CV fits retain 1e-7.}
+\item{categorical_null_nsim}{Number of categorical null simulations, separate from nsim bootstrap samples. Defaults to 1000.}
 \item{datablock}{A list of matrices with the same number of columns (samples).}
 
 \item{nsim}{Number of bootstrap resamples for inferring angle bounds.}
@@ -41,13 +48,11 @@ DIVASmain(
 
 \item{categorical_datablock}{A list of categorical matrices or data.frames. Data.frames have samples as rows and categorical variables as columns; matrices have categories as rows and samples as columns.}
 
-\item{categorical_rank}{Optional initial rank for categorical blocks. All initial directions are retained unless categorical culling is explicitly enabled.}
+\item{categorical_rank}{Optional latent signal rank for categorical blocks. Nuclear fits retain the leading singular components at this rank after five-fold response CV selects lambda. Initial directions are retained unless categorical culling is enabled.}
 
-\item{categorical_method}{`"fixed_rank"` (default) or `"nuclear_cv"`. The latter selects a nuclear-norm penalty by cross-validation of held-out categorical responses.}
+\item{categorical_method}{CHOIR estimator: "mca" (default) or "nuclear_norm". Only categorical blocks use this setting. The selected estimator is used in observed, null and parametric-bootstrap fits. MCA centers/scales indicators. Nuclear norm fits penalized multinomial likelihood with centering on the latent signal; five-fold response CV selects lambda and rank, and the selected penalty is fixed in null and bootstrap refits. Main passes raw categorical data to the CHOIR extractor.}
 
-\item{categorical_cv_folds}{Number of folds for categorical nuclear-norm cross-validation.}
-
-\item{categorical_lambda_grid}{Optional positive penalty values to consider. By default, ten values are generated from the MCA singular spectrum.}
+\item{categorical_lambda_grid}{Optional finite nonnegative penalties for nuclear five-fold response CV selection. NULL uses factors 1.05, 0.75, 0.45, 0.25, and 0.1 times the intercept-only score spectral norm. Ignored for MCA.}
 
 \item{categorical_cull}{Apply rank culling using simulated categorical null angles. Defaults to FALSE, retaining the initial categorical rank.}
 
@@ -73,6 +78,8 @@ Main function for DIVAS analysis. Given a list of data blocks with matched colum
 structure with diagnostic plots.
 }
 \details{
+Categorical blocks use fixed-score multinomial likelihood reconstruction. Their Loadings are category coefficients and scoresList contains fixed centered scores. categoricalReconstruction includes intercepts, additive component logits, probabilities, residuals and solver diagnostics, also in compact output. Continuous reconstruction remains least squares.
+
 DIVASmain returns a list containing all important information returned from the DIVAS algorithm.
 For users, the most important ones are scores (matBlocks), loadings (matLoadings) and an index
 book (keyIdxMap) explaining what joint structures each score or loading matrix correpsond to.

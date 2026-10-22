@@ -27,18 +27,15 @@ We provide an R implementation of DIVAS (Prothero et al., 2024), a statistical m
 
 ### Dependencies
 
-The DIVAS package requires the current 1.x line of the `CVXR` package for compatibility with the SCS solver interface. The package has been tested with `CVXR` 1.0-15. In `DESCRIPTION`, DIVAS also declares `CVXR (>= 1.0-15)` as a package dependency.
+DIVAS requires `CVXR (>= 1.8.2)`. Nuclear multinomial fits use its declarative
+objective and constraints with the Clarabel solver.
 
 ```R
 # Install devtools (if not already installed)
 install.packages("devtools")
 
-# Install CVXR 1.x. DIVAS has been tested with CVXR 1.0-15.
-install.packages("remotes")
-remotes::install_version("CVXR", version = "1.0-15", repos = "https://cloud.r-project.org")
-
-# Alternatively, install the latest CRAN release if it is compatible with your R version.
-# install.packages("CVXR")
+# Install CVXR 1.8.2 or newer.
+install.packages("CVXR")
 ```
 
 ### Installing the DIVAS package

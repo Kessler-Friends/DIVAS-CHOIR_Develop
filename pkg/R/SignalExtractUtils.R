@@ -38,12 +38,11 @@ MatCenterJP <- function(X, iColCent = F, iRowCent = F) {
   return(outMat)
 }
 
-
-
-#' Construct MCA-Style SVD Input for Categorical DIVAS Blocks
+#' Prepare a Categorical Block for the Selected CHOIR Estimator
 #'
-#' `MatCenterDIVASCHOIR` converts a categorical data block into the centered
-#' and scaled indicator matrix used for MCA-style singular value decomposition.
+#' MCA returns centered, scaled indicators. Nuclear likelihood returns unchanged
+#' one-hot observations; its intercept and latent-signal constraints are applied
+#' during estimation, rather than by transforming the observations.
 #'
 #' For a block with `n` samples and total one-hot dimension `J`, this constructs
 #' the matrix
@@ -60,17 +59,27 @@ MatCenterJP <- function(X, iColCent = F, iRowCent = F) {
 #'   zero row. This is used for bootstrap samples so all draws have the same
 #'   category rows as the observed block.
 #'
+#' @param method Either mca or nuclear_norm; selects preparation only.
 #' @return A numeric matrix with categories/features in rows and samples in
 #'   columns.
 #'
 #' @export
-MatCenterDIVASCHOIR <- function(block, allow_empty_levels = FALSE) {
+MatCenterDIVASCHOIR <- function(block, allow_empty_levels = FALSE,
+                                method = c("mca", "nuclear_norm")) {
+  method <- match.arg(method)
+  prepare <- switch(method, mca = choir_prepare_mca, nuclear_norm = choir_prepare_nuclear)
+  if (!is.null(attr(block, "divaschoir_variable_levels"))) {
+    previous <- attr(block, "divaschoir_method")
+    if (is.null(previous)) previous <- "mca"
+    if (previous != method) stop("Prepared CHOIR block uses ", previous,
+                                 "; pass raw data to change methods.")
+    return(block)
+  }
   if (!is.logical(allow_empty_levels) || length(allow_empty_levels) != 1L ||
       is.na(allow_empty_levels))
     stop("`allow_empty_levels` must be TRUE or FALSE.")
   block <- as.data.frame(block)
   block[] <- lapply(block, function(x) if (is.factor(x)) x else factor(x))
-
   indicator_list <- Map(function(x, variable_name) {
     mm <- stats::model.matrix(~ x - 1)
     level_names <- sub("^x", "", colnames(mm))
@@ -81,19 +90,55 @@ MatCenterDIVASCHOIR <- function(block, allow_empty_levels = FALSE) {
   p_hat <- colMeans(indicator)
   if (any(p_hat == 0) && !allow_empty_levels)
     stop("A categorical level is unobserved; remove unused levels from the observed block.")
-
-  svd_input <- sweep(t(indicator), 1, p_hat, "-")
-  # An absent bootstrap category is already a zero row; divide it by one.
-  svd_input <- sweep(svd_input, 1, sqrt(ifelse(p_hat > 0, p_hat, 1)), "/")
-
-  colnames(svd_input) <- rownames(block)
-  attr(svd_input, "divaschoir_variable_levels") <- Map(function(variable_name, indicator_matrix) {
-    list(
-      variable = variable_name,
-      levels = levels(block[[variable_name]]),
-      rows = colnames(indicator_matrix)
-    )
+  x <- t(indicator)
+  colnames(x) <- rownames(block)
+  attr(x, "divaschoir_variable_levels") <- Map(function(variable_name, indicator_matrix) {
+    list(variable = variable_name, levels = levels(block[[variable_name]]),
+         rows = colnames(indicator_matrix))
   }, names(block), indicator_list)
-  attr(svd_input, "divaschoir_p_hat") <- p_hat
-  svd_input
+  attr(x, "divaschoir_p_hat") <- p_hat
+  prepare(x)
+}
+
+# MCA: center and scale the shared one-hot matrix.
+choir_prepare_mca <- function(x) {
+  p <- attr(x, "divaschoir_p_hat")
+  x <- sweep(x, 1L, p, "-")
+  x <- sweep(x, 1L, sqrt(ifelse(p > 0, p, 1)), "/")
+  attr(x, "divaschoir_method") <- "mca"
+  x
+}
+
+# Log-softmax across each variable's categories, separately for each subject.
+choir_log_softmax <- function(theta, groups) {
+  log_probs <- theta
+  for (rows in groups) {
+    logits <- theta[rows, , drop = FALSE]
+    logits <- sweep(logits, 2L, apply(logits, 2L, max), "-")
+    log_probs[rows, ] <- sweep(logits, 2L, log(colSums(exp(logits))), "-")
+  }
+  log_probs
+}
+
+# Center logits within each variable, optionally across subjects as well.
+choir_center_logits <- function(x, groups, subjects = TRUE) {
+  if (subjects) x <- sweep(x, 1L, rowMeans(x), "-")
+  for (rows in groups) x[rows, ] <- sweep(x[rows, , drop = FALSE], 2L,
+    colMeans(x[rows, , drop = FALSE]), "-")
+  x
+}
+
+# Keep observations unchanged; initialize the constrained latent parameters.
+choir_prepare_nuclear <- function(z) {
+  groups <- lapply(attr(z, "divaschoir_variable_levels"),
+                   function(variable) match(variable$rows, rownames(z)))
+  mu <- log(pmax(rowMeans(z), 1e-8))
+  for (rows in groups) mu[rows] <- mu[rows] - mean(mu[rows])
+  attr(z, "divaschoir_setup") <- list(
+    groups = groups,
+    mu = mu,
+    eta = matrix(0, nrow(z), ncol(z), dimnames = dimnames(z))
+  )
+  attr(z, "divaschoir_method") <- "nuclear_norm"
+  z
 }
